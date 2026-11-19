@@ -1,0 +1,8 @@
+Mawaqit Home uses the following third-party services and libraries:
+
+- dadb (https://github.com/mobile-dev-inc/dadb) - Apache License 2.0
+- Open-Meteo weather data (https://open-meteo.com) - CC BY 4.0, attribution required
+- Aladhan prayer-times API (https://aladhan.com) - fallback source for prayer times
+- Mawaqit (https://mawaqit.net) - the live prayer-times page shown as the background;
+  its content belongs to its owners and is not part of this repository.
+- ipwho.is / ipapi.co - approximate IP geolocation for the weather location
