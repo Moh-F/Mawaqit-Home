@@ -793,6 +793,30 @@ public class MainActivity extends Activity {
         return new double[]{DEFAULT_LAT, DEFAULT_LON};
     }
 
+    /** IP services return ASCII ("Saarbrucken"); the geocoder gives the real spelling (ü ä ö ß). */
+    private String properName(String name, double lat, double lon) {
+        if (name == null || name.isEmpty()) return name;
+        try {
+            String u = "https://geocoding-api.open-meteo.com/v1/search?name="
+                    + URLEncoder.encode(name, "UTF-8") + "&count=10&language=de&format=json";
+            JSONArray r = new JSONObject(httpGet(u)).optJSONArray("results");
+            double best = 1e9;
+            String bn = name;
+            for (int i = 0; r != null && i < r.length(); i++) {
+                JSONObject o = r.getJSONObject(i);
+                double d = Math.abs(o.getDouble("latitude") - lat) + Math.abs(o.getDouble("longitude") - lon);
+                if (d < best) {
+                    best = d;
+                    bn = o.optString("name", name);
+                }
+            }
+            if (best < 0.5) return bn;
+        } catch (Exception e) {
+            AppLog.info("LOC", "name lookup failed: " + e);
+        }
+        return name;
+    }
+
     private void ipLookup() {
         String[] urls = {"https://ipwho.is/?fields=success,latitude,longitude,city",
                 "https://ipapi.co/json/"};
@@ -801,7 +825,7 @@ public class MainActivity extends Activity {
                 JSONObject j = new JSONObject(httpGet(u));
                 if (j.has("success") && !j.optBoolean("success", true)) continue;
                 double lat = j.getDouble("latitude"), lon = j.getDouble("longitude");
-                String city = j.optString("city", "");
+                String city = properName(j.optString("city", ""), lat, lon);
                 prefs.edit().putString("ip_lat", Double.toString(lat))
                         .putString("ip_lon", Double.toString(lon))
                         .putString("ip_city", city)
@@ -1499,9 +1523,9 @@ public class MainActivity extends Activity {
             "يتبع لون الصفحة تلقائياً"};
 
     static final String[] PAL_NAMES = {"أخضر زمردي", "أزرق ليلي", "بنفسجي", "ذهبي بنّي", "رمادي فحمي",
-            "أحمر عنابي", "لون مخصص…"};
-    static final int[] PAL_TOP = {0xFF14503C, 0xFF16396B, 0xFF4A2A78, 0xFF6B4A14, 0xFF3A4048, 0xFF6E1E2E};
-    static final int[] PAL_BOT = {0xFF04140E, 0xFF050E22, 0xFF150A26, 0xFF1E1404, 0xFF0C0E10, 0xFF1E050C};
+            "أحمر عنابي", "تركوازي", "وردي", "برتقالي", "أسود نقي", "أزرق سماوي", "زيتي", "لون مخصص…"};
+    static final int[] PAL_TOP = {0xFF14503C, 0xFF16396B, 0xFF4A2A78, 0xFF6B4A14, 0xFF3A4048, 0xFF6E1E2E, 0xFF0F6B6B, 0xFF8A2F5C, 0xFF9A4A10, 0xFF1A1A1A, 0xFF1E6FA8, 0xFF4A5A1C};
+    static final int[] PAL_BOT = {0xFF04140E, 0xFF050E22, 0xFF150A26, 0xFF1E1404, 0xFF0C0E10, 0xFF1E050C, 0xFF03181A, 0xFF220A18, 0xFF241002, 0xFF000000, 0xFF06182A, 0xFF121804};
 
     private int[] paletteColors() {
         int c = prefs.getInt("strip_col", 0);
@@ -1757,7 +1781,7 @@ public class MainActivity extends Activity {
         root.setBackground(fillMode ? new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{0xFF05100C, 0xFF0B2A20}) : new ColorDrawable(Color.BLACK));
         if (fillMode) {
-            wl.height = topH;
+            wl.height = prefs.getBoolean("strip_over", false) ? ViewGroup.LayoutParams.MATCH_PARENT : topH;
             webView.setScaleX(1f);
             webView.setScaleY(1f);
         } else {
@@ -2792,9 +2816,17 @@ public class MainActivity extends Activity {
         l.add("🔲  حجم الأيقونات:  " + prefs.getInt("tile_pct", 100) + "%");
         a.add(() -> numberDialog("حجم الأيقونات", "tile_pct", 100, 40, 150, "%", null, null,
                 this::recreate, this::showStripSettings));
-        l.add("📐  ارتفاع منطقة الصفحة:  " + prefs.getInt("top_pct", 82) + "%");
-        a.add(() -> numberDialog("ارتفاع منطقة الصفحة (قلّله مع صفين أو ثلاثة)", "top_pct", 82, 55, 95,
-                "%", null, null, this::recreate, this::showStripSettings));
+        l.add("📐  ارتفاع منطقة الصفحة (يحدد ارتفاع الشريط):  " + prefs.getInt("top_pct", 82) + "%");
+        a.add(() -> numberDialog("ارتفاع منطقة الصفحة = 100% − ارتفاع الشريط (قلّله مع صفين أو ثلاثة)",
+                "top_pct", 82, 55, 95, "%", null, null, this::recreate, this::showStripSettings));
+        l.add("🪟  موضع الشريط:  " + (prefs.getBoolean("strip_over", false) ? "فوق صفحة المواقيت (يغطي أسفلها)"
+                : "تحت الصفحة (منفصل)"));
+        a.add(() -> choice("موضع الشريط", new String[]{"تحت الصفحة (الصفحة تنتهي فوقه)",
+                "فوق الصفحة (الصفحة بكامل الشاشة والشريط يغطي أسفلها)"},
+                prefs.getBoolean("strip_over", false) ? 1 : 0, i -> {
+                    prefs.edit().putBoolean("strip_over", i == 1).apply();
+                    recreate();
+                }, this::showStripSettings));
         l.add("🖼  وضع عرض الصفحة:  " + (prefs.getInt("fit", 1) == 1 ? "ملء العرض" : "تصغير متناسب"));
         a.add(() -> choice("وضع عرض الصفحة",
                 new String[]{"تصغير متناسب: حركة سلسة جداً لكن تظهر أشرطة جانبية",
@@ -3060,7 +3092,7 @@ public class MainActivity extends Activity {
             String err = null;
             try {
                 String u = "https://geocoding-api.open-meteo.com/v1/search?name="
-                        + URLEncoder.encode(name, "UTF-8") + "&count=1&language=ar&format=json";
+                        + URLEncoder.encode(name, "UTF-8") + "&count=1&language=de&format=json";
                 JSONArray r = new JSONObject(httpGet(u)).optJSONArray("results");
                 if (r == null || r.length() == 0) {
                     err = "لم أجد هذه المدينة";
@@ -3193,11 +3225,51 @@ public class MainActivity extends Activity {
     private void showLogDialog() {
         File f = AppLog.file();
         showInfo("سجل الأخطاء", "آخر الأحداث (للقراءة بالكامل استخدم «مشاركة عبر الشبكة»):",
-                (f != null ? f.getAbsolutePath() + "\n\n" : "") + AppLog.tail(40),
-                "حسناً", null, "مشاركة عبر الشبكة", this::startLogServer, "مسح السجل", () -> {
+                (f != null ? f.getAbsolutePath() + "\\n\\n" : "") + AppLog.tail(40),
+                "مشاركة عبر الشبكة", this::startLogServer, "فحص بنية الصفحة", this::inspectPage,
+                "مسح السجل", () -> {
                     AppLog.clear();
                     toast("تم المسح");
                 });
+    }
+
+    private String domDump = "";
+
+    private static final String JS_DOM = "(function(){var o=[],n=0;"
+            + "function vis(e){var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}"
+            + "var all=document.body.getElementsByTagName('*');"
+            + "for(var i=0;i<all.length&&n<260;i++){var e=all[i];if(!vis(e))continue;"
+            + "var t='';for(var c=e.firstChild;c;c=c.nextSibling){if(c.nodeType==3)t+=c.nodeValue;}"
+            + "t=t.replace(/\\s+/g,' ').trim();"
+            + "var leaf=t.length>0||e.tagName=='IMG'||e.tagName=='CANVAS'||e.tagName=='SVG';"
+            + "var r=e.getBoundingClientRect();var cs=getComputedStyle(e);"
+            + "var big=(r.width>innerWidth*0.15&&r.height>innerHeight*0.1)&&e.children.length>0;"
+            + "if(!leaf&&!big)continue;n++;"
+            + "var d=0,p=e;while(p&&p!==document.body){d++;p=p.parentElement;}"
+            + "o.push(d+'|'+e.tagName.toLowerCase()+(e.id?'#'+e.id:'')"
+            + "+(e.className&&e.className.baseVal===undefined?'.'+String(e.className).trim().split(/\\s+/).join('.'):'')"
+            + "+' ['+Math.round(r.left)+','+Math.round(r.top)+' '+Math.round(r.width)+'x'+Math.round(r.height)+']'"
+            + "+' pos='+cs.position+' disp='+cs.display+' fs='+cs.fontSize+(t?' \"'+t.substring(0,40)+'\"':''));}"
+            + "return 'viewport '+innerWidth+'x'+innerHeight+' body.class='+document.body.className"
+            + "+' iframes='+document.getElementsByTagName('iframe').length+'\\n'+o.join('\\n');})()";
+
+    /** Dumps the live page's element tree (ids, classes, boxes) so it can be shared and analysed. */
+    private void inspectPage() {
+        toast("جارٍ فحص الصفحة…");
+        webView.evaluateJavascript(JS_DOM, v -> {
+            String r = v == null ? "" : v;
+            try {
+                r = new JSONArray("[" + r + "]").getString(0);
+            } catch (Exception ignored) {
+            }
+            domDump = r;
+            AppLog.info("DOM", "dumped " + r.length() + " chars");
+            if (r.length() < 20) {
+                toast("لم أحصل على بنية الصفحة (هل الصفحة محمّلة؟)");
+            } else {
+                startLogServer();
+            }
+        });
     }
 
     private String localIp() {
@@ -3220,7 +3292,7 @@ public class MainActivity extends Activity {
                 + "Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT
                 + ")  " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + "\n"
                 + "Screen " + sizeW + "x" + sizeH + "  density " + getResources().getDisplayMetrics().density + "\n\n"
-                + statusText() + "\n\n==== LOG ====\n" + AppLog.all();
+                + statusText() + "\n\n==== PAGE DOM ====\n" + domDump + "\n\n==== LOG ====\n" + AppLog.all();
     }
 
     /** Serves the full log on the local network for 10 minutes, behind a random link. */
