@@ -2179,8 +2179,9 @@ public class MainActivity extends Activity {
         final Window w = d.getWindow();
         if (w == null) return;
         View dv = w.getDecorView();
-        dv.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        dv.setTextDirection(View.TEXT_DIRECTION_RTL);
+        // Layout stays LTR on purpose (old Fire OS mishandles RTL window decor and pushes content
+        // off-screen); Arabic alignment is done explicitly per text view instead.
+        dv.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         int pct = Math.max(30, Math.min(100, prefs.getInt("ui_alpha", 92)));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(argb(pct * 255 / 100, 0x0B, 0x1E, 0x17));
@@ -2191,14 +2192,27 @@ public class MainActivity extends Activity {
         else w.setDimAmount(0.45f);
         d.setOnShowListener(x -> {
             applySounds(w.getDecorView());
-            WindowManager.LayoutParams lp = w.getAttributes();
-            int sw = sizeW > 0 ? sizeW : getResources().getDisplayMetrics().widthPixels;
+            int sw = getResources().getDisplayMetrics().widthPixels;
+            int sh = getResources().getDisplayMetrics().heightPixels;
             int side = prefs.getInt("ui_side", 0);        // 0 left, 1 centre, 2 right
-            lp.width = Math.min(sw - dp(40), Math.max(dp(360), Math.round(sw * 0.40f)));
+            int width = Math.min(sw - dp(40), Math.max(dp(360), Math.round(sw * 0.40f)));
+            w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+            WindowManager.LayoutParams lp = w.getAttributes();
             lp.gravity = (side == 0 ? Gravity.LEFT : side == 2 ? Gravity.RIGHT
                     : Gravity.CENTER_HORIZONTAL) | Gravity.CENTER_VERTICAL;
             lp.x = side == 1 ? 0 : dp(28);
+            lp.y = 0;
             w.setAttributes(lp);
+            int tid = getResources().getIdentifier("alertTitle", "id", "android");
+            View tt = tid != 0 ? d.findViewById(tid) : null;
+            if (tt instanceof TextView) {
+                TextView t = (TextView) tt;
+                t.setTextDirection(View.TEXT_DIRECTION_RTL);
+                t.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+                t.setSingleLine(false);
+                ViewGroup.LayoutParams tl = t.getLayoutParams();
+                if (tl != null) { tl.width = ViewGroup.LayoutParams.MATCH_PARENT; t.setLayoutParams(tl); }
+            }
         });
     }
 
@@ -2240,7 +2254,6 @@ public class MainActivity extends Activity {
         t.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(17));
         t.setTextColor(new ColorStateList(new int[][]{{android.R.attr.state_selected}, {}},
                 new int[]{0xFFF4C95D, 0xFFFFFFFF}));
-        t.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         t.setTextDirection(View.TEXT_DIRECTION_RTL);
         t.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         t.setPadding(dp(18), dp(11), dp(18), dp(11));
@@ -2403,12 +2416,12 @@ public class MainActivity extends Activity {
             TextView a = new TextView(this);
             a.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
             a.setTextColor(Color.WHITE);
-            a.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
             a.setTextDirection(View.TEXT_DIRECTION_RTL);
             a.setGravity(Gravity.RIGHT);
             a.setLineSpacing(0f, 1.15f);
             a.setText(rtl);
-            box.addView(a);
+            box.addView(a, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
         }
         if (ltr != null && !ltr.isEmpty()) {
             TextView b = new TextView(this);
