@@ -1423,6 +1423,7 @@ public class MainActivity extends Activity {
         updBusy = true;
         long idle = background ? SystemClock.elapsedRealtime() - lastInput : 0L;
         if (!background) showBubble("⚙ جارٍ تثبيت التحديث… سيعاد تشغيل التطبيق", 0L);
+        final File apkF = readyApk;
         Updater.install(this, readyApk, idle, new AdbShell.Callback() {
             @Override public void done(boolean ok, String output) {
                 // Reached only when the install did not replace the app (failure)
@@ -1431,11 +1432,13 @@ public class MainActivity extends Activity {
                 hideBubble();
                 AppLog.info("UPDATE", "install result ok=" + ok + " " + output);
                 if (ok) return;
-                dialog("تعذّر تثبيت التحديث").setMessage(output
-                        + "\n\nتأكد من تفعيل ADB debugging ثم ⚙ ← إعدادات Mawaqit Home ← "
-                        + "اتصال ADB الذاتي ← اختبار الاتصال.\n"
-                        + "إذا كان السبب اختلاف التوقيع فاحذف النسخة القديمة مرة واحدة فقط.")
-                        .setPositiveButton("حسناً", null).show();
+                if (background) return;
+                // No ADB on this device (phone / new Google TV): use the system installer instead.
+                showBubble("⚙ فتح مثبّت أندرويد… وافق على التحديث", 8000L);
+                Updater.installViaSession(MainActivity.this, apkF, () -> dialog("تعذّر تثبيت التحديث")
+                        .setMessage("لم ينجح التثبيت. اسمح لـ Mawaqit Home بتثبيت التطبيقات من "
+                                + "إعدادات أندرويد (تثبيت تطبيقات غير معروفة) ثم أعد المحاولة.\n\n" + output)
+                        .setPositiveButton("حسناً", null).show());
             }
         });
     }

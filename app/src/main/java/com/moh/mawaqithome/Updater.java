@@ -192,6 +192,60 @@ public final class Updater {
         AdbShell.run(c, cmd, cb);
     }
 
+    /**
+     * Fallback for devices without ADB on port 5555 (phones, newer Google TV): installs through the
+     * system installer. Same signing key, so it updates in place and keeps every setting.
+     * The user confirms once on the system screen.
+     */
+    public static void installViaSession(final Context c, File apk, final Runnable onFail) {
+        try {
+            final Context app = c.getApplicationContext();
+            final String action = app.getPackageName() + ".INSTALL_RESULT";
+            final android.content.pm.PackageInstaller pi = app.getPackageManager().getPackageInstaller();
+            android.content.pm.PackageInstaller.SessionParams sp = new android.content.pm.PackageInstaller.SessionParams(
+                    android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            final int id = pi.createSession(sp);
+            android.content.pm.PackageInstaller.Session ses = pi.openSession(id);
+            java.io.InputStream in = new java.io.FileInputStream(apk);
+            java.io.OutputStream out = ses.openWrite("update", 0, apk.length());
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            ses.fsync(out);
+            in.close();
+            out.close();
+            android.content.BroadcastReceiver rx = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(Context ctx, android.content.Intent i) {
+                    int st = i.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999);
+                    String msg = i.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE);
+                    AppLog.info("UPDATE", "session status " + st + " " + msg);
+                    if (st == android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                        android.content.Intent confirm = i.getParcelableExtra(android.content.Intent.EXTRA_INTENT);
+                        if (confirm != null) {
+                            confirm.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                            ctx.startActivity(confirm);
+                        }
+                    } else {
+                        try { ctx.getApplicationContext().unregisterReceiver(this); } catch (Exception ignored) { }
+                        if (st != android.content.pm.PackageInstaller.STATUS_SUCCESS && onFail != null) {
+                            MAIN.post(onFail);
+                        }
+                    }
+                }
+            };
+            app.registerReceiver(rx, new android.content.IntentFilter(action));
+            android.content.Intent it = new android.content.Intent(action).setPackage(app.getPackageName());
+            android.app.PendingIntent pend = android.app.PendingIntent.getBroadcast(app, id, it,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+            ses.commit(pend.getIntentSender());
+            ses.close();
+            AppLog.info("UPDATE", "system installer session " + id + " committed");
+        } catch (Exception e) {
+            AppLog.error("UPDATE", "session install failed", e);
+            if (onFail != null) onFail.run();
+        }
+    }
+
     private static String readAll(InputStream in) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[4096];
