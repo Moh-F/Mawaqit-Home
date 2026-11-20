@@ -2166,7 +2166,7 @@ public class MainActivity extends Activity {
 
     private AlertDialog.Builder dialog(String title) {
         // Arabic UI: every dialog is laid out right-to-left and styled like the launcher
-        return new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert) {
+        return new AlertDialog.Builder(this, R.style.LauncherDialog) {
             @Override public AlertDialog create() {
                 AlertDialog d = super.create();
                 styleDialog(d);
