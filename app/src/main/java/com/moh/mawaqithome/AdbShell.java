@@ -52,19 +52,34 @@ public final class AdbShell {
         } catch (Exception ignored) {
         }
         Throwable last = null;
-        for (String h : hosts) {
-            try {
-                Dadb d = Dadb.create(h, 5555, pair);
-                d.shell("echo ok");               // forces the connection / auth now
-                dadb = d;
-                AppLog.info("ADB", "connected via " + h);
-                return d;
-            } catch (Throwable t) {
-                last = t;
-                AppLog.info("ADB", "connect " + h + " failed: " + t);
+        // EOF usually means the "Allow USB debugging?" prompt was just answered (adbd drops the
+        // first connection), so try a few rounds before giving up.
+        for (int round = 1; round <= 3; round++) {
+            for (String h : hosts) {
+                try {
+                    Dadb d = Dadb.create(h, 5555, pair);
+                    d.shell("echo ok");           // forces the connection / auth now
+                    dadb = d;
+                    AppLog.info("ADB", "connected via " + h + " (round " + round + ")");
+                    return d;
+                } catch (Throwable t) {
+                    last = t;
+                    AppLog.info("ADB", "round " + round + " " + h + " failed: " + t);
+                }
+            }
+            if (round < 3) {
+                try { Thread.sleep(2500); } catch (InterruptedException ignored) { }
             }
         }
         throw new Exception(String.valueOf(last), last);
+    }
+
+    /** Deletes this app's ADB key so the next connection asks for authorisation again. */
+    public static synchronized void resetKey(Context c) {
+        reset();
+        new File(c.getFilesDir(), "adbkey").delete();
+        new File(c.getFilesDir(), "adbkey.pub").delete();
+        AppLog.info("ADB", "key reset");
     }
 
     private static synchronized void reset() {

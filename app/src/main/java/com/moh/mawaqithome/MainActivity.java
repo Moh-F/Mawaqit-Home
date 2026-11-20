@@ -300,6 +300,12 @@ public class MainActivity extends Activity {
     private boolean moveMode = false;
     private String movePkg = null;
 
+    private static boolean splashDone = false;      // shown once per process start
+    private FrameLayout splash;
+    private TextView splashPct;
+    private android.widget.ProgressBar splashBar;
+    private int splashShown = 0;
+    private boolean pageMain = true;                // false while the adhan / iqama screen is up
     private int stage = 0;                 // 0 normal, 1 page full-screen, 2 dimmed, 3 black
     private boolean sleepTried = false;
     private long lastInput = SystemClock.elapsedRealtime();
@@ -479,6 +485,7 @@ public class MainActivity extends Activity {
         railRight = prefs.getInt("rail_side", 0) == 1;
         checkVersionChange();
 
+        loadFonts();
         root = new FrameLayout(this);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -491,12 +498,18 @@ public class MainActivity extends Activity {
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override public void onProgressChanged(WebView v, int p) {
+                setSplash(25 + p * 75 / 100);
+            }
+        });
         webView.setFocusable(false);
         webView.setFocusableInTouchMode(false);
         configureWebView();
         shiftLayer.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        webView.loadUrl(url);                      // start the network as early as possible
         buildWeatherCard();
         buildStrip();
         buildBubble();
@@ -509,8 +522,10 @@ public class MainActivity extends Activity {
         root.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        if (!splashDone) buildSplash();
         setContentView(root);
         applySounds(root);
+        applyFont(root);
         getWindow().getDecorView().setSoundEffectsEnabled(prefs.getBoolean("sounds", true));
         hideSystemUi();
 
@@ -540,8 +555,9 @@ public class MainActivity extends Activity {
                     }
                 });
 
-        webView.loadUrl(url);
+        setSplash(25);
         handler.postDelayed(reloadTask, RELOAD_EVERY_MS);
+        handler.postDelayed(pageStateTask, 4000L);
         handler.post(weatherTask);
         handler.post(tickTask);
         handler.postDelayed(idleTask, 10_000L);
@@ -623,6 +639,32 @@ public class MainActivity extends Activity {
         // Home screen: Back does nothing.
     }
 
+    private static final String JS_STATE = "(function(){function vis(e){if(!e)return false;var r=e.getBoundingClientRect();"
+            + "var c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none';}"
+            + "var a=document.querySelector('.center-time'),p=document.querySelector('.prayers');"
+            + "return (vis(a)&&vis(p))?'1':'0';})()";
+
+    private final Runnable pageStateTask = new Runnable() {
+        @Override public void run() {
+            handler.postDelayed(this, 2000L);
+            if (!pageOk || stage != 0) return;
+            webView.evaluateJavascript(JS_STATE, v -> {
+                boolean main = v == null || !v.contains("0");
+                if (main != pageMain) {
+                    pageMain = main;
+                    AppLog.info("PAGE", main ? "main screen" : "adhan/iqama screen");
+                    applyWeatherVis(true);
+                }
+            });
+        }
+    };
+
+    private void applyWeatherVis(boolean animate) {
+        if (weatherCard == null || !prefs.getBoolean("w_show", true)) return;
+        boolean visible = stage == 0 && (pageMain || !prefs.getBoolean("w_hide_adhan", true));
+        weatherCard.animate().alpha(visible ? 1f : 0f).setDuration(animate ? ms(600L) : 0L).start();
+    }
+
     private void doWake() {
         AppLog.info("WAKE", "woken by the pre-adhan alarm");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
@@ -657,6 +699,58 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ URL
 
+    private void buildSplash() {
+        splash = new FrameLayout(this);
+        splash.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF05100C, 0xFF0B2A20}));
+        splash.setClickable(true);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER);
+        android.widget.ImageView logo = new android.widget.ImageView(this);
+        logo.setImageResource(R.drawable.banner);
+        logo.setAdjustViewBounds(true);
+        col.addView(logo, new LinearLayout.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView nm = text(22, true);
+        nm.setText("Mawaqit Home");
+        nm.setGravity(Gravity.CENTER);
+        nm.setPadding(0, dp(14), 0, dp(14));
+        col.addView(nm, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        splashBar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        splashBar.setMax(100);
+        splashBar.getProgressDrawable().setColorFilter(0xFFF4C95D, android.graphics.PorterDuff.Mode.SRC_IN);
+        col.addView(splashBar, new LinearLayout.LayoutParams(dp(300), dp(8)));
+        splashPct = text(16, true);
+        splashPct.setGravity(Gravity.CENTER);
+        splashPct.setTextColor(0xFFF4C95D);
+        splashPct.setPadding(0, dp(10), 0, 0);
+        col.addView(splashPct, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        splash.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        root.addView(splash, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        setSplash(5);
+        handler.postDelayed(this::hideSplash, 30_000L);      // never block the screen for good
+    }
+
+    private void setSplash(int pct) {
+        if (splash == null) return;
+        pct = Math.max(splashShown, Math.min(100, pct));
+        splashShown = pct;
+        splashBar.setProgress(pct);
+        splashPct.setText(pct + "%");
+    }
+
+    private void hideSplash() {
+        if (splash == null) return;
+        final View sp = splash;
+        splash = null;
+        splashDone = true;
+        sp.animate().alpha(0f).setDuration(450).withEndAction(() -> root.removeView(sp)).start();
+    }
+
     private void resolveUrl(Intent intent) {
         String extra = intent != null ? intent.getStringExtra("url") : null;
         if (extra != null && extra.startsWith("https://")) {
@@ -687,12 +781,15 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String u, Bitmap favicon) {
                 errorThisLoad = false;
+                setSplash(30);
             }
 
             @Override
             public void onPageFinished(WebView view, String finishedUrl) {
                 if (errorThisLoad) return;          // Android also calls this after a failed load
                 pageOk = true;
+                setSplash(100);
+                handler.postDelayed(MainActivity.this::hideSplash, 500L);
                 pageLoadedAt = System.currentTimeMillis();
                 wdSame = 0;
                 wdLast = "";
@@ -946,7 +1043,7 @@ public class MainActivity extends Activity {
     }
 
     private void setPx(TextView t, float size) {
-        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, wsc(size));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, wsc(size) * Math.max(60, Math.min(200, prefs.getInt("font_pct", 100))) / 100f);
     }
 
     private void buildWeatherCard() {
@@ -1041,11 +1138,18 @@ public class MainActivity extends Activity {
             row.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
             row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.CENTER_VERTICAL);
             row.setPadding(cols ? wsc(6) : 0, wsc(2), cols ? wsc(6) : 0, wsc(2));
+            row.setMinimumHeight(cols ? 0 : wsc(54));
+            wSub[i].setSingleLine(!cols);
+            wSub[i].setMaxLines(cols ? 2 : 1);
+            wTemp[i].setGravity(Gravity.CENTER);
+            wSub[i].setGravity(Gravity.CENTER);
             row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             setPx(wDay[i], 12);
-            wDay[i].setGravity(cols ? Gravity.CENTER : Gravity.START | Gravity.CENTER_VERTICAL);
+            int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
+            wDay[i].setGravity(cols ? Gravity.CENTER : (al == 1 ? Gravity.CENTER
+                    : al == 2 ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL);
             wDay[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     : new LinearLayout.LayoutParams(wsc(96), ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1057,7 +1161,7 @@ public class MainActivity extends Activity {
             setPx(wSub[i], 10);
             tc.setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : new LinearLayout.LayoutParams(wsc(104), ViewGroup.LayoutParams.WRAP_CONTENT));
+                    : new LinearLayout.LayoutParams(wsc(136), ViewGroup.LayoutParams.WRAP_CONTENT));
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -1072,7 +1176,7 @@ public class MainActivity extends Activity {
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
         if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + 3 * 112);
-        return wsc(14 + 14 + 96 + 36 + 104);
+        return wsc(14 + 14 + 96 + 36 + 136);
     }
 
     /**
@@ -1138,7 +1242,8 @@ public class MainActivity extends Activity {
         for (int i = 0; i < 3; i++) {
             Day d = weather.days[i];
             wDay[i].setText(dayLabel(names[i], d.date));
-            String rain = d.rain >= 0 ? "   🌧 " + d.rain + "%" : "";
+            String sep = prefs.getInt("w_layout", 0) == 1 ? "\n" : "   ";
+            String rain = d.rain >= 0 ? sep + "🌧 " + d.rain + "%" : "";
             if (i == 0) {
                 wIcon[i].setText(weather.curIcon);
                 wTemp[i].setText(weather.curTemp + "°");
@@ -1445,14 +1550,61 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- Views
 
+    // ---- fonts, text scale, accent colour
+
+    static final String[] FONT_NAMES = {"الخط الافتراضي للنظام", "Tajawal — عصري واضح", "Almarai — حديث مريح",
+            "Amiri — نسخ كلاسيكي", "Scheherazade — خط المصحف", "Lalezar — عناوين عريضة"};
+    private static final String[][] FONT_FILES = {null, {"Tajawal-Regular", "Tajawal-Bold"},
+            {"Almarai-Regular", "Almarai-Bold"}, {"Amiri-Regular", "Amiri-Bold"},
+            {"ScheherazadeNew-Regular", "ScheherazadeNew-Bold"}, {"Lalezar-Regular", "Lalezar-Regular"}};
+    static final String[] ACC_NAMES = {"ذهبي", "أبيض", "أخضر", "أزرق", "وردي", "برتقالي", "سماوي"};
+    private static final int[] ACC = {0xFFF4C95D, 0xFFFFFFFF, 0xFF7BE0A0, 0xFF6AB7FF, 0xFFFF8FC0,
+            0xFFFFA14A, 0xFF5FE3E3};
+    private Typeface tfReg = Typeface.DEFAULT, tfBold = Typeface.DEFAULT_BOLD;
+
+    private void loadFonts() {
+        int f = prefs.getInt("font", 0);
+        if (f <= 0 || f >= FONT_FILES.length) return;
+        try {
+            tfReg = Typeface.createFromAsset(getAssets(), "fonts/" + FONT_FILES[f][0] + ".ttf");
+            tfBold = Typeface.createFromAsset(getAssets(), "fonts/" + FONT_FILES[f][1] + ".ttf");
+        } catch (Throwable t) {
+            AppLog.error("FONT", "load failed", t);
+        }
+    }
+
+    private Typeface tf(boolean bold) { return bold ? tfBold : tfReg; }
+
+    /** Text size scaled by the user's font-size setting. */
+    private int fs(int v) {
+        return Math.round(dp(v) * Math.max(60, Math.min(200, prefs.getInt("font_pct", 100))) / 100f);
+    }
+
+    private int acc() { return ACC[Math.max(0, Math.min(ACC.length - 1, prefs.getInt("ui_accent", 0)))]; }
+
+    private static int withAlpha(int c, int a) { return (a << 24) | (c & 0xFFFFFF); }
+
+    /** Applies the chosen font to every text view below v (monospace blocks keep their font). */
+    private void applyFont(View v) {
+        if (v instanceof TextView) {
+            TextView t = (TextView) v;
+            Typeface cur = t.getTypeface();
+            if (cur != Typeface.MONOSPACE) t.setTypeface(tf(cur != null && cur.isBold()));
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) applyFont(g.getChildAt(i));
+        }
+    }
+
     private TextView text(int size, boolean bold) {
         TextView t = new TextView(this);
         t.setTextColor(Color.WHITE);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(size));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(size));
         t.setShadowLayer(dp(2), 0f, dp(1), 0xFF000000);
         t.setTextDirection(View.TEXT_DIRECTION_LTR);
         t.setSingleLine(true);
-        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setTypeface(tf(bold));
         return t;
     }
 
@@ -1782,8 +1934,9 @@ public class MainActivity extends Activity {
     private void onSized(int w, int h) {
         pageRatio = prefs.getInt("top_pct", 82) / 100f;
         fillMode = prefs.getInt("fit", 1) == 1;
-        topH = Math.round(h * pageRatio);
-        stripH = h - topH;
+        int hp = prefs.getInt("strip_hp", 0);                  // 0 = automatic (from the page area)
+        stripH = hp > 0 ? Math.round(h * hp / 100f) : h - Math.round(h * pageRatio);
+        topH = h - stripH;
         pageRatio = topH / (float) h;
         layoutWeather();
 
@@ -1805,12 +1958,14 @@ public class MainActivity extends Activity {
         int avail = stripH - labelH - dp(9);
         float scale = prefs.getInt("tile_pct", 100) / 100f;
         int perRow = avail / rows;
-        float base = Math.min(perRow, dp(150)) * 0.88f;
+        float base = perRow * 0.88f;
         tilePx = Math.max(dp(34), Math.min(perRow, Math.round(base * scale)));
         iconPx = Math.round(tilePx * 0.62f);
 
         FrameLayout.LayoutParams sl = (FrameLayout.LayoutParams) strip.getLayoutParams();
         sl.height = stripH;
+        sl.width = Math.round(w * Math.max(30, Math.min(100, prefs.getInt("strip_wp", 100))) / 100f);
+        sl.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
         strip.setLayoutParams(sl);
 
         topRow.setLayoutParams(new LinearLayout.LayoutParams(
@@ -1921,7 +2076,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < railItems.size(); i++) {
             boolean sel = i == tabIdx;
             railItems.get(i).setTextColor(sel ? 0xFFF4C95D : Color.WHITE);
-            railItems.get(i).setTypeface(sel ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            railItems.get(i).setTypeface(tf(sel));
         }
 
         grid.removeAllViews();
@@ -1971,6 +2126,7 @@ public class MainActivity extends Activity {
         }
 
         applySounds(grid);
+        applyFont(grid);
         if (focusIndex >= 0 && !tiles.isEmpty()) {
             tiles.get(Math.min(focusIndex, tiles.size() - 1)).requestFocus();
         }
@@ -2263,15 +2419,15 @@ public class MainActivity extends Activity {
             GradientDrawable bg = new GradientDrawable();
             bg.setColor(argb(pct * 255 / 100, 0x0B, 0x1E, 0x17));
             bg.setCornerRadius(dp(22));
-            bg.setStroke(dp(1), argb(Math.min(255, pct * 255 / 100), 0xF4, 0xC9, 0x5D));
+            bg.setStroke(dp(1), withAlpha(acc(), Math.min(255, pct * 255 / 100)));
             root.setBackground(bg);
             root.setPadding(dp(10), dp(6), dp(10), dp(10));
 
             TextView tt = new TextView(MainActivity.this);
             tt.setText(title);
-            tt.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(21));
-            tt.setTypeface(Typeface.DEFAULT_BOLD);
-            tt.setTextColor(0xFFF4C95D);
+            tt.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(21));
+            tt.setTypeface(tf(true));
+            tt.setTextColor(acc());
             tt.setTextDirection(View.TEXT_DIRECTION_RTL);
             tt.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
             tt.setPadding(dp(16), dp(14), dp(16), dp(10));
@@ -2325,7 +2481,7 @@ public class MainActivity extends Activity {
                 sv.setFocusable(true);
                 TextView mt = new TextView(MainActivity.this);
                 mt.setText(msg);
-                mt.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
+                mt.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(16));
                 mt.setTextColor(Color.WHITE);
                 mt.setLineSpacing(0f, 1.15f);
                 mt.setTextDirection(View.TEXT_DIRECTION_RTL);
@@ -2351,9 +2507,9 @@ public class MainActivity extends Activity {
                 final int which = i;
                 TextView bt = new TextView(MainActivity.this);
                 bt.setText(btnText[i]);
-                bt.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
-                bt.setTypeface(Typeface.DEFAULT_BOLD);
-                bt.setTextColor(i == 2 ? 0xFFF4C95D : Color.WHITE);
+                bt.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(16));
+                bt.setTypeface(tf(true));
+                bt.setTextColor(i == 2 ? acc() : Color.WHITE);
                 bt.setGravity(Gravity.CENTER);
                 bt.setSingleLine(false);
                 bt.setMinHeight(dp(46));
@@ -2361,8 +2517,8 @@ public class MainActivity extends Activity {
                 bt.setFocusable(true);
                 bt.setClickable(true);
                 GradientDrawable on = new GradientDrawable();
-                on.setColor(0x33F4C95D);
-                on.setStroke(dp(2), 0xFFF4C95D);
+                on.setColor(withAlpha(acc(), 0x33));
+                on.setStroke(dp(2), acc());
                 on.setCornerRadius(dp(12));
                 GradientDrawable off = new GradientDrawable();
                 off.setColor(0x22FFFFFF);
@@ -2415,7 +2571,7 @@ public class MainActivity extends Activity {
                 w.setAttributes(lp);
             }
             d.setOnShowListener(x -> {
-                if (w != null) applySounds(w.getDecorView());
+                if (w != null) { applySounds(w.getDecorView()); applyFont(w.getDecorView()); }
                 if (d.listView != null) d.listView.requestFocus();
                 else if (d.focusFirst != null) d.focusFirst.requestFocus();
             });
@@ -2455,23 +2611,23 @@ public class MainActivity extends Activity {
         @Override public View getView(int pos, View cv, ViewGroup parent) {
             TextView t = cv instanceof TextView ? (TextView) cv : newMenuRow();
             t.setText(labels[pos]);
-            t.setTypeface(pos == sel ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            t.setTypeface(tf(pos == sel));
             return t;
         }
     }
 
     private TextView newMenuRow() {
         TextView t = new TextView(this);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(17));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(17));
         t.setTextColor(new ColorStateList(new int[][]{{android.R.attr.state_selected}, {}},
-                new int[]{0xFFF4C95D, 0xFFFFFFFF}));
+                new int[]{acc(), 0xFFFFFFFF}));
         t.setTextDirection(View.TEXT_DIRECTION_RTL);
         t.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         t.setPadding(dp(18), dp(11), dp(18), dp(11));
         t.setMinHeight(dp(50));
         GradientDrawable on = new GradientDrawable();
-        on.setColor(0x33F4C95D);
-        on.setStroke(dp(2), 0xFFF4C95D);
+        on.setColor(withAlpha(acc(), 0x33));
+        on.setStroke(dp(2), acc());
         on.setCornerRadius(dp(12));
         StateListDrawable sl = new StateListDrawable();
         sl.setEnterFadeDuration(150);
@@ -2540,7 +2696,7 @@ public class MainActivity extends Activity {
         box.setGravity(Gravity.CENTER_HORIZONTAL);
         box.setPadding(dp(20), dp(10), dp(20), dp(6));
         final TextView tv = text(44, true);
-        tv.setTextColor(0xFFF4C95D);
+        tv.setTextColor(acc());
         tv.setGravity(Gravity.CENTER);
         TextView hint = text(13, false);
         hint.setTextDirection(View.TEXT_DIRECTION_RTL);
@@ -2620,7 +2776,7 @@ public class MainActivity extends Activity {
         box.setPadding(dp(22), dp(8), dp(22), dp(8));
         if (rtl != null && !rtl.isEmpty()) {
             TextView a = new TextView(this);
-            a.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
+            a.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(16));
             a.setTextColor(Color.WHITE);
             a.setTextDirection(View.TEXT_DIRECTION_RTL);
             a.setGravity(Gravity.RIGHT);
@@ -2631,7 +2787,7 @@ public class MainActivity extends Activity {
         }
         if (ltr != null && !ltr.isEmpty()) {
             TextView b = new TextView(this);
-            b.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(12));
+            b.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(12));
             b.setTextColor(0xFFCFE3DA);
             b.setTypeface(Typeface.MONOSPACE);
             b.setTextDirection(View.TEXT_DIRECTION_LTR);
@@ -2816,11 +2972,29 @@ public class MainActivity extends Activity {
         a.add(this::showAdbDialog);
         l.add("📋  سجل الأخطاء ومشاركته");
         a.add(this::showLogDialog);
+        l.add("🔁  إعادة تشغيل التطبيق");
+        a.add(this::restartApp);
         l.add("↩  إعادة ضبط اللانشر");
         a.add(this::showReset);
         l.add("ℹ  حول التطبيق — الإصدار " + Updater.currentName(this));
         a.add(this::showAbout);
         menu("إعدادات Mawaqit Home", l, a, null);
+    }
+
+    private void restartApp() {
+        AppLog.info("APP", "restart requested");
+        try {
+            Intent i = new Intent(this, MainActivity.class).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 77, i,
+                    android.app.PendingIntent.FLAG_CANCEL_CURRENT);
+            ((android.app.AlarmManager) getSystemService(ALARM_SERVICE)).set(
+                    android.app.AlarmManager.RTC, System.currentTimeMillis() + 800, pi);
+        } catch (Throwable t) {
+            AppLog.error("APP", "restart alarm failed", t);
+        }
+        finishAffinity();
+        handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 300L);
     }
 
     private String statusText() {
@@ -3045,7 +3219,13 @@ public class MainActivity extends Activity {
                     recreate();
                 }, this::showStripSettings));
         l.add("🔲  حجم الأيقونات:  " + prefs.getInt("tile_pct", 100) + "%");
-        a.add(() -> numberDialog("حجم الأيقونات", "tile_pct", 100, 40, 150, "%", null, null,
+        a.add(() -> numberDialog("حجم الأيقونات (يكبر حتى يملأ ارتفاع الشريط)", "tile_pct", 100, 40, 300, "%",
+                null, null, this::recreate, this::showStripSettings));
+        l.add("↕  ارتفاع الشريط:  " + (prefs.getInt("strip_hp", 0) == 0 ? "تلقائي" : prefs.getInt("strip_hp", 0) + "%"));
+        a.add(() -> numberDialog("ارتفاع الشريط (% من الشاشة، 0 = تلقائي)", "strip_hp", 0, 0, 70, "%", "تلقائي",
+                null, this::recreate, this::showStripSettings));
+        l.add("↔  عرض الشريط:  " + prefs.getInt("strip_wp", 100) + "%");
+        a.add(() -> numberDialog("عرض الشريط (% من الشاشة)", "strip_wp", 100, 30, 100, "%", null, null,
                 this::recreate, this::showStripSettings));
         l.add("📐  ارتفاع منطقة الصفحة (يحدد ارتفاع الشريط):  " + prefs.getInt("top_pct", 82) + "%");
         a.add(() -> numberDialog("ارتفاع منطقة الصفحة = 100% − ارتفاع الشريط (قلّله مع صفين أو ثلاثة)",
@@ -3286,6 +3466,19 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
+        l.add("⬌  محاذاة نص اليوم:  " + new String[]{"يمين", "وسط", "يسار"}[prefs.getInt("w_align", 0) % 3]);
+        a.add(() -> choice("محاذاة نص اليوم في الصفوف", new String[]{"يمين", "وسط", "يسار"},
+                prefs.getInt("w_align", 0), i -> {
+                    prefs.edit().putInt("w_align", i).apply();
+                    layoutWeather();
+                    showWeatherSettings();
+                }, back));
+        l.add("🕌  إخفاء البطاقة وقت الأذان:  " + onOff(prefs.getBoolean("w_hide_adhan", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("w_hide_adhan", !prefs.getBoolean("w_hide_adhan", true)).apply();
+            applyWeatherVis(true);
+            showWeatherSettings();
+        });
         l.add("⇄  اتجاه الترتيب:  " + (prefs.getInt("w_flip", 0) == 1 ? "من اليسار لليمين" : "من اليمين لليسار"));
         a.add(() -> {
             prefs.edit().putInt("w_flip", prefs.getInt("w_flip", 0) == 1 ? 0 : 1).apply();
@@ -3379,6 +3572,19 @@ public class MainActivity extends Activity {
         l.add("🔆  شفافية نوافذ الإعدادات:  " + prefs.getInt("ui_alpha", 92) + "%");
         a.add(() -> numberDialog("شفافية نوافذ الإعدادات (أقل = ترى اللانشر خلفها)", "ui_alpha", 92, 30, 100,
                 "%", null, null, this::showMotionSettings, this::showMotionSettings));
+        l.add("🔤  نوع الخط:  " + FONT_NAMES[Math.max(0, Math.min(FONT_NAMES.length - 1, prefs.getInt("font", 0)))]);
+        a.add(() -> choice("نوع الخط للانشر كله", FONT_NAMES, prefs.getInt("font", 0), i -> {
+            prefs.edit().putInt("font", i).apply();
+            recreate();
+        }, this::showMotionSettings));
+        l.add("🔠  حجم الخط:  " + prefs.getInt("font_pct", 100) + "%");
+        a.add(() -> numberDialog("حجم الخط في اللانشر كله", "font_pct", 100, 70, 160, "%", null, null,
+                this::recreate, this::showMotionSettings));
+        l.add("🎨  لون تحديد القوائم:  " + ACC_NAMES[Math.max(0, Math.min(ACC_NAMES.length - 1, prefs.getInt("ui_accent", 0)))]);
+        a.add(() -> choice("لون تحديد القوائم", ACC_NAMES, prefs.getInt("ui_accent", 0), i -> {
+            prefs.edit().putInt("ui_accent", i).apply();
+            showMotionSettings();
+        }, this::showMotionSettings));
         final String[] sides = {"اليسار", "الوسط", "اليمين"};
         l.add("📌  مكان نوافذ الإعدادات:  " + sides[Math.max(0, Math.min(2, prefs.getInt("ui_side", 0)))]);
         a.add(() -> choice("مكان نوافذ الإعدادات", sides, prefs.getInt("ui_side", 0), i -> {
@@ -3450,6 +3656,9 @@ public class MainActivity extends Activity {
                                     .setPositiveButton("حسناً", null).show();
                         }
                     });
+                }).setNeutralButton("مفتاح جديد", (d, w) -> {
+                    AdbShell.resetKey(MainActivity.this);
+                    toast("تم إنشاء مفتاح جديد — اضغط «اختبار الاتصال» ووافق على نافذة التلفزيون");
                 }).setNegativeButton("إغلاق", null).show();
     }
 
@@ -3939,9 +4148,7 @@ public class MainActivity extends Activity {
 
         strip.animate().translationY(ui ? 0f : stripH + dp(6)).setDuration(dur)
                 .setInterpolator(ip).start();
-        if (prefs.getBoolean("w_show", true)) {
-            weatherCard.animate().alpha(ui ? 1f : 0f).setDuration(animate ? ms(600L) : 0L).start();
-        }
+        applyWeatherVis(animate);
 
         if (!fillMode) {
             webView.animate().scaleX(ui ? pageRatio : 1f).scaleY(ui ? pageRatio : 1f)
@@ -3958,7 +4165,8 @@ public class MainActivity extends Activity {
 
     private void resizeWebFill(final boolean full, boolean animate) {
         final FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) webView.getLayoutParams();
-        final int target = full ? ViewGroup.LayoutParams.MATCH_PARENT : topH;
+        final int target = full || prefs.getBoolean("strip_over", false)
+                ? ViewGroup.LayoutParams.MATCH_PARENT : topH;
         if (!animate) {
             lp.height = target;
             webView.setLayoutParams(lp);

@@ -6,3 +6,7 @@ Mawaqit Home uses the following third-party services and libraries:
 - Mawaqit (https://mawaqit.net) - the live prayer-times page shown as the background;
   its content belongs to its owners and is not part of this repository.
 - ipwho.is / ipapi.co - approximate IP geolocation for the weather location
+
+Fonts (bundled in app/src/main/assets/fonts, SIL Open Font License 1.1; license texts alongside):
+  Tajawal (Boutros International), Almarai (Almarai), Amiri (The Amiri Project Authors),
+  Scheherazade New (SIL Global), Lalezar (The Lalezar Project Authors).
