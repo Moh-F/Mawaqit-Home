@@ -14,6 +14,7 @@
 
     <application
         android:allowBackup="false"
+        android:supportsRtl="true"
         android:banner="@drawable/banner"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"

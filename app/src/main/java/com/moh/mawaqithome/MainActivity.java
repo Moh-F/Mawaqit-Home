@@ -1,6 +1,21 @@
 package com.moh.mawaqithome;
 
 import android.annotation.TargetApi;
+import android.content.res.ColorStateList;
+import android.graphics.drawable.LayerDrawable;
+import android.view.Window;
+import android.widget.AdapterView;
+import android.widget.BaseAdapter;
+import android.widget.ListView;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.Enumeration;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.IntentFilter;
@@ -26,6 +41,7 @@ import android.graphics.drawable.StateListDrawable;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -137,7 +153,7 @@ public class MainActivity extends Activity {
     private static final String[] MONTHS = {"كانون الثاني", "شباط", "آذار", "نيسان", "أيار",
             "حزيران", "تموز", "آب", "أيلول", "تشرين الأول", "تشرين الثاني", "كانون الأول"};
     private static final String[] CAT_ICONS = {"📁", "📡", "🎬", "🛠", "🎮", "📚", "🎵", "⭐",
-            "🏠", "🌐", "👨‍👩‍👧", "🧰"};
+            "🏠", "🌐", "📺", "🔧"};
 
     private static final String JS_TIMES =
             "(function(){try{var c=(typeof confData!=='undefined')?confData:window.confData;"
@@ -156,7 +172,7 @@ public class MainActivity extends Activity {
 
     // "#..." entries are handled inside the launcher itself.
     private static final Shortcut[] SHORTCUTS = {
-            new Shortcut("🧰", "إعدادات Mawaqit Home", "#settings"),
+            new Shortcut("🕌", "إعدادات Mawaqit Home", "#settings"),
             new Shortcut("⚙️", "إعدادات الجهاز", "android.settings.SETTINGS"),
             new Shortcut("📶", "الشبكة / Wi-Fi", "android.settings.WIFI_SETTINGS",
                     "android.settings.WIRELESS_SETTINGS"),
@@ -172,7 +188,7 @@ public class MainActivity extends Activity {
                     "android.settings.SETTINGS"),
             new Shortcut("🛠", "خيارات المطوّر", "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
                     "android.settings.SETTINGS"),
-            new Shortcut("🕌", "فحص أوقات الصلاة والإيقاظ", "#prayer"),
+            new Shortcut("⏰", "فحص أوقات الصلاة والإيقاظ", "#prayer"),
             new Shortcut("👁", "التطبيقات المخفية", "#hidden"),
             new Shortcut("📤", "نسخ احتياطي للإعدادات", "#backup"),
             new Shortcut("📥", "استعادة الإعدادات", "#restore"),
@@ -239,6 +255,10 @@ public class MainActivity extends Activity {
             wTemp = new TextView[3], wSub = new TextView[3];
     private View wSep;
     private boolean wMove = false;
+    private LinearLayout daysBox;
+    private final LinearLayout[] dayView = new LinearLayout[3];
+    private final Map<String, Integer> lastPos = new HashMap<>();
+    private ServerSocket logSrv;
     private WeatherData weather;
     private long weatherAt = 0L;
     private boolean weatherFailed = false;
@@ -460,6 +480,7 @@ public class MainActivity extends Activity {
         checkVersionChange();
 
         root = new FrameLayout(this);
+        root.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{0xFF05100C, 0xFF0B2A20}));
 
@@ -489,6 +510,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+        applySounds(root);
+        getWindow().getDecorView().setSoundEffectsEnabled(prefs.getBoolean("sounds", true));
         hideSystemUi();
 
         reloadApps();
@@ -919,8 +942,12 @@ public class MainActivity extends Activity {
         weatherCard.addView(wSep, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 1));
 
+        daysBox = new LinearLayout(this);
+        weatherCard.addView(daysBox, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         for (int i = 0; i < 3; i++) {
             LinearLayout row = new LinearLayout(this);
+            dayView[i] = row;
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
 
@@ -949,7 +976,7 @@ public class MainActivity extends Activity {
             row.addView(wDay[i]);
             row.addView(wIcon[i]);
             row.addView(tc);
-            weatherCard.addView(row);
+            daysBox.addView(row);
         }
 
         weatherAge = text(10, false);
@@ -978,20 +1005,33 @@ public class MainActivity extends Activity {
         sp.topMargin = wsc(5);
         sp.bottomMargin = wsc(3);
         wSep.setLayoutParams(sp);
+        final boolean cols = prefs.getInt("w_layout", 0) == 1;
+        weatherCard.setLayoutDirection(prefs.getInt("w_flip", 0) == 1
+                ? View.LAYOUT_DIRECTION_LTR : View.LAYOUT_DIRECTION_RTL);
+        daysBox.setOrientation(cols ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         for (int i = 0; i < 3; i++) {
+            LinearLayout row = dayView[i];
+            View tc = (View) wTemp[i].getParent();
+            row.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.CENTER_VERTICAL);
+            row.setPadding(cols ? wsc(6) : 0, wsc(2), cols ? wsc(6) : 0, wsc(2));
+            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
+                    ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             setPx(wDay[i], 12);
-            wDay[i].setLayoutParams(new LinearLayout.LayoutParams(wsc(96),
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            wDay[i].setGravity(cols ? Gravity.CENTER : Gravity.START | Gravity.CENTER_VERTICAL);
+            wDay[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    : new LinearLayout.LayoutParams(wsc(96), ViewGroup.LayoutParams.WRAP_CONTENT));
             setPx(wIcon[i], 26);
-            wIcon[i].setLayoutParams(new LinearLayout.LayoutParams(wsc(36),
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            wIcon[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    : new LinearLayout.LayoutParams(wsc(36), ViewGroup.LayoutParams.WRAP_CONTENT));
             setPx(wTemp[i], 15);
             setPx(wSub[i], 10);
-            View tc = (View) wTemp[i].getParent();
-            tc.setLayoutParams(new LinearLayout.LayoutParams(wsc(104),
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
-            View row = (View) tc.getParent();
-            row.setPadding(0, wsc(2), 0, wsc(2));
+            tc.setLayoutParams(cols ? new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    : new LinearLayout.LayoutParams(wsc(104), ViewGroup.LayoutParams.WRAP_CONTENT));
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -1005,6 +1045,7 @@ public class MainActivity extends Activity {
 
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
+        if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + 3 * 112);
         return wsc(14 + 14 + 96 + 36 + 104);
     }
 
@@ -1033,7 +1074,8 @@ public class MainActivity extends Activity {
     private void applyWeatherStyle() {
         int a = Math.max(0, Math.min(100, prefs.getInt("w_alpha", 55)));
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{argb(a * 255 / 100, 0x10, 0x32, 0x28), argb(a * 255 / 100, 0x06, 0x18, 0x12)});
+                new int[]{((a * 255 / 100) << 24) | (paletteColors()[0] & 0xFFFFFF),
+                        ((a * 255 / 100) << 24) | (paletteColors()[1] & 0xFFFFFF)});
         bg.setStroke(Math.max(1, dp(1)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
         bg.setCornerRadius(wsc(16));
         weatherCard.setBackground(bg);
@@ -1456,6 +1498,26 @@ public class MainActivity extends Activity {
     private static final String[] STRIP_STYLES = {"داكن", "شفاف", "متدرج أخضر (مثل الصفحة)",
             "يتبع لون الصفحة تلقائياً"};
 
+    static final String[] PAL_NAMES = {"أخضر زمردي", "أزرق ليلي", "بنفسجي", "ذهبي بنّي", "رمادي فحمي",
+            "أحمر عنابي", "لون مخصص…"};
+    static final int[] PAL_TOP = {0xFF14503C, 0xFF16396B, 0xFF4A2A78, 0xFF6B4A14, 0xFF3A4048, 0xFF6E1E2E};
+    static final int[] PAL_BOT = {0xFF04140E, 0xFF050E22, 0xFF150A26, 0xFF1E1404, 0xFF0C0E10, 0xFF1E050C};
+
+    private int[] paletteColors() {
+        int c = prefs.getInt("strip_col", 0);
+        if (c >= PAL_TOP.length) {
+            try {
+                int t = Color.parseColor(prefs.getString("strip_hex", "#103A2C"));
+                int r = (t >> 16) & 255, g = (t >> 8) & 255, b = t & 255;
+                return new int[]{0xFF000000 | t, 0xFF000000 | ((r * 30 / 100) << 16) | ((g * 30 / 100) << 8)
+                        | (b * 30 / 100)};
+            } catch (Exception e) {
+                c = 0;
+            }
+        }
+        return new int[]{PAL_TOP[c], PAL_BOT[c]};
+    }
+
     private void applyStripStyle() {
         int style = prefs.getInt("strip_style", 2);
         int a = Math.max(0, Math.min(100, prefs.getInt("strip_alpha", 92))) * 255 / 100;
@@ -1471,11 +1533,27 @@ public class MainActivity extends Activity {
             top = argb(a, r, g, b);
             bot = argb(a, r * 55 / 100, g * 55 / 100, b * 55 / 100);
         } else {
-            top = argb(a, 0x10, 0x3A, 0x2C);
-            bot = argb(a, 0x05, 0x14, 0x0E);
+            int[] pc = paletteColors();
+            top = (a << 24) | (pc[0] & 0xFFFFFF);
+            bot = (a << 24) | (pc[1] & 0xFFFFFF);
         }
-        strip.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{top, bot}));
+        // 3D: rounded top corners, gold rim, a glossy highlight layer and a raised edge
+        GradientDrawable body = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{top, bot});
+        float rd = dp(22);
+        body.setCornerRadii(new float[]{rd, rd, rd, rd, 0, 0, 0, 0});
+        GradientDrawable gloss = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{argb(a * 30 / 255, 255, 255, 255), 0x00FFFFFF});
+        gloss.setCornerRadii(new float[]{rd, rd, rd, rd, 0, 0, 0, 0});
+        GradientDrawable rim = new GradientDrawable();
+        rim.setColor(Color.TRANSPARENT);
+        rim.setCornerRadii(new float[]{rd, rd, rd, rd, 0, 0, 0, 0});
+        rim.setStroke(Math.max(1, dp(1)), argb(a * 130 / 255, 0xF4, 0xC9, 0x5D));
+        LayerDrawable ld = new LayerDrawable(new android.graphics.drawable.Drawable[]{body, gloss, rim});
+        ld.setLayerInset(1, 0, 0, 0, dp(70));
+        if (style == 1) ld = new LayerDrawable(new android.graphics.drawable.Drawable[]{body, rim});
+        strip.setBackground(ld);
+        if (Build.VERSION.SDK_INT >= 21) strip.setElevation(dp(10));
     }
 
     /** Style 3: reads the colour of the page's bottom edge so the strip matches the page. */
@@ -1669,13 +1747,15 @@ public class MainActivity extends Activity {
 
     private void onSized(int w, int h) {
         pageRatio = prefs.getInt("top_pct", 82) / 100f;
-        fillMode = prefs.getInt("fit", 0) == 1;
+        fillMode = prefs.getInt("fit", 1) == 1;
         topH = Math.round(h * pageRatio);
         stripH = h - topH;
         pageRatio = topH / (float) h;
         layoutWeather();
 
         FrameLayout.LayoutParams wl = (FrameLayout.LayoutParams) webView.getLayoutParams();
+        root.setBackground(fillMode ? new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF05100C, 0xFF0B2A20}) : new ColorDrawable(Color.BLACK));
         if (fillMode) {
             wl.height = topH;
             webView.setScaleX(1f);
@@ -1856,6 +1936,7 @@ public class MainActivity extends Activity {
             }
         }
 
+        applySounds(grid);
         if (focusIndex >= 0 && !tiles.isEmpty()) {
             tiles.get(Math.min(focusIndex, tiles.size() - 1)).requestFocus();
         }
@@ -1985,7 +2066,15 @@ public class MainActivity extends Activity {
 
         StateListDrawable sl = new StateListDrawable();
         sl.addState(new int[]{android.R.attr.state_focused}, focused);
-        sl.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
+        if (prefs.getBoolean("tile_plate", true)) {
+            GradientDrawable plate = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{0x2EFFFFFF, 0x0DFFFFFF});
+            plate.setCornerRadius(dp(12));
+            plate.setStroke(Math.max(1, dp(1)), 0x22FFFFFF);
+            sl.addState(new int[]{}, plate);
+        } else {
+            sl.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
+        }
         return sl;
     }
 
@@ -2013,13 +2102,13 @@ public class MainActivity extends Activity {
     // --------------------------------------------------------------- Sounds
 
     private void tick() {
-        if (audio != null && prefs.getBoolean("sounds", true)) {
+        if (audio != null && stage == 0 && prefs.getBoolean("sounds", true)) {
             audio.playSoundEffect(AudioManager.FX_FOCUS_NAVIGATION_RIGHT, 0.5f);
         }
     }
 
     private void clickSound() {
-        if (audio != null && prefs.getBoolean("sounds", true)) {
+        if (audio != null && stage == 0 && prefs.getBoolean("sounds", true)) {
             audio.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.7f);
         }
     }
@@ -2042,16 +2131,278 @@ public class MainActivity extends Activity {
     }
 
     private AlertDialog.Builder dialog(String title) {
-        // Arabic UI: every dialog is laid out right-to-left
+        // Arabic UI: every dialog is laid out right-to-left and styled like the launcher
         return new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert) {
             @Override public AlertDialog create() {
                 AlertDialog d = super.create();
-                View dv = d.getWindow().getDecorView();
-                dv.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-                dv.setTextDirection(View.TEXT_DIRECTION_RTL);
+                styleDialog(d);
                 return d;
             }
         }.setTitle(title);
+    }
+
+    private void styleDialog(final AlertDialog d) {
+        final Window w = d.getWindow();
+        if (w == null) return;
+        View dv = w.getDecorView();
+        dv.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        dv.setTextDirection(View.TEXT_DIRECTION_RTL);
+        int pct = Math.max(30, Math.min(100, prefs.getInt("ui_alpha", 92)));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(argb(pct * 255 / 100, 0x0B, 0x1E, 0x17));
+        bg.setCornerRadius(dp(22));
+        bg.setStroke(dp(1), argb(pct * 130 / 100, 0xF4, 0xC9, 0x5D));
+        w.setBackgroundDrawable(bg);
+        if (pct < 90) w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        else w.setDimAmount(0.45f);
+        d.setOnShowListener(x -> {
+            applySounds(w.getDecorView());
+            WindowManager.LayoutParams lp = w.getAttributes();
+            int sw = sizeW > 0 ? sizeW : getResources().getDisplayMetrics().widthPixels;
+            int side = prefs.getInt("ui_side", 0);        // 0 left, 1 centre, 2 right
+            lp.width = Math.min(sw - dp(40), Math.max(dp(360), Math.round(sw * 0.40f)));
+            lp.gravity = (side == 0 ? Gravity.LEFT : side == 2 ? Gravity.RIGHT
+                    : Gravity.CENTER_HORIZONTAL) | Gravity.CENTER_VERTICAL;
+            lp.x = side == 1 ? 0 : dp(28);
+            w.setAttributes(lp);
+        });
+    }
+
+    /** Recursively applies the "sounds" setting (the framework plays focus sounds from the decor). */
+    private void applySounds(View v) {
+        boolean on = prefs.getBoolean("sounds", true);
+        v.setSoundEffectsEnabled(on);
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) applySounds(g.getChildAt(i));
+        }
+    }
+
+    private class MenuAdapter extends BaseAdapter {
+        final String[] labels;
+        int sel;
+
+        MenuAdapter(String[] l, int s) {
+            labels = l;
+            sel = s;
+        }
+
+        @Override public int getCount() { return labels.length; }
+
+        @Override public Object getItem(int i) { return labels[i]; }
+
+        @Override public long getItemId(int i) { return i; }
+
+        @Override public View getView(int pos, View cv, ViewGroup parent) {
+            TextView t = cv instanceof TextView ? (TextView) cv : newMenuRow();
+            t.setText(labels[pos]);
+            t.setTypeface(pos == sel ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            return t;
+        }
+    }
+
+    private TextView newMenuRow() {
+        TextView t = new TextView(this);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(17));
+        t.setTextColor(new ColorStateList(new int[][]{{android.R.attr.state_selected}, {}},
+                new int[]{0xFFF4C95D, 0xFFFFFFFF}));
+        t.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        t.setTextDirection(View.TEXT_DIRECTION_RTL);
+        t.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        t.setPadding(dp(18), dp(11), dp(18), dp(11));
+        t.setMinHeight(dp(50));
+        GradientDrawable on = new GradientDrawable();
+        on.setColor(0x33F4C95D);
+        on.setStroke(dp(2), 0xFFF4C95D);
+        on.setCornerRadius(dp(12));
+        StateListDrawable sl = new StateListDrawable();
+        sl.setEnterFadeDuration(150);
+        sl.setExitFadeDuration(220);
+        sl.addState(new int[]{android.R.attr.state_selected}, on);
+        sl.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
+        t.setBackground(sl);
+        t.setSoundEffectsEnabled(prefs.getBoolean("sounds", true));
+        return t;
+    }
+
+    /** Menu/choice list that remembers the last highlighted row and shows it clearly. */
+    private void listDialog(final String title, final String[] labels, int initial,
+                            final Pick pick, final Runnable back) {
+        final MenuAdapter ad = new MenuAdapter(labels, initial);
+        AlertDialog.Builder b = dialog(title).setAdapter(ad, (d, which) -> {
+            lastPos.put(title, which);
+            pick.on(which);
+        });
+        if (back != null) b.setNegativeButton("رجوع", (d, w) -> back.run());
+        else b.setNegativeButton("إغلاق", null);
+        final AlertDialog d = b.create();
+        d.show();
+        final ListView lv = d.getListView();
+        lv.setSelector(new ColorDrawable(Color.TRANSPARENT));
+        lv.setDivider(new ColorDrawable(Color.TRANSPARENT));
+        lv.setDividerHeight(dp(3));
+        lv.setPadding(dp(8), dp(4), dp(8), dp(4));
+        lv.setClipToPadding(false);
+        lv.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+                lastPos.put(title, pos);
+                if (ad.sel != pos) {
+                    ad.sel = pos;
+                    ad.notifyDataSetChanged();
+                }
+            }
+
+            @Override public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        final int start = Math.max(0, Math.min(labels.length - 1, initial));
+        lv.requestFocus();
+        lv.post(() -> lv.setSelection(start));
+    }
+
+    private void menu(String title, List<String> labels, final List<Runnable> acts,
+                      final Runnable back) {
+        Integer lp = lastPos.get(title);
+        listDialog(title, labels.toArray(new String[0]), lp == null ? 0 : lp,
+                i -> acts.get(i).run(), back);
+    }
+
+    /** Single-choice list; the current value is marked with a check. */
+    private void choice(String title, String[] labels, int selected, final Pick p,
+                        final Runnable back) {
+        String[] l = new String[labels.length];
+        for (int i = 0; i < l.length; i++) l[i] = (i == selected ? "✓  " : "") + labels[i];
+        Integer lp = lastPos.get(title);
+        listDialog(title, l, selected >= 0 ? selected : (lp == null ? 0 : lp), p, back);
+    }
+
+    /** Smooth numeric stepper: arrows change by 1 (hold to speed up), changes preview live. */
+    private void numberDialog(String title, final String key, final int def, final int min,
+                              final int max, final String unit, final String zero,
+                              final Runnable live, final Runnable done, final Runnable back) {
+        final int orig = prefs.getInt(key, def);
+        final int[] val = {Math.max(min, Math.min(max, orig))};
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.setPadding(dp(20), dp(10), dp(20), dp(6));
+        final TextView tv = text(44, true);
+        tv.setTextColor(0xFFF4C95D);
+        tv.setGravity(Gravity.CENTER);
+        TextView hint = text(13, false);
+        hint.setTextDirection(View.TEXT_DIRECTION_RTL);
+        hint.setSingleLine(false);
+        hint.setGravity(Gravity.CENTER);
+        hint.setText("▲ ▶ زيادة  •  ▼ ◀ نقصان  •  الضغط المطوّل يسرّع  •  OK حفظ");
+        final Runnable refresh = () -> {
+            tv.setText(val[0] == 0 && zero != null ? zero : val[0] + unit);
+            prefs.edit().putInt(key, val[0]).apply();
+            if (live != null) live.run();
+        };
+        refresh.run();
+        box.addView(tv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        box.addView(hint, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.CENTER);
+        btns.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        int[] deltas = {-10, -1, 1, 10};
+        for (final int dl : deltas) {
+            TextView b = text(16, true);
+            b.setText(dl > 0 ? "+" + dl : String.valueOf(dl));
+            b.setGravity(Gravity.CENTER);
+            GradientDrawable bb = new GradientDrawable();
+            bb.setColor(0x26FFFFFF);
+            bb.setCornerRadius(dp(10));
+            b.setBackground(bb);
+            b.setClickable(true);                     // touch only; D-pad uses the arrows
+            b.setOnClickListener(v -> {
+                val[0] = Math.max(min, Math.min(max, val[0] + dl));
+                refresh.run();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(56), dp(38));
+            lp.setMargins(dp(5), dp(10), dp(5), dp(4));
+            btns.addView(b, lp);
+        }
+        box.addView(btns);
+
+        final Runnable restore = () -> {
+            prefs.edit().putInt(key, orig).apply();
+            if (live != null) live.run();
+            if (back != null) back.run();
+        };
+        final AlertDialog d = dialog(title).setView(box)
+                .setPositiveButton("حفظ", (dd, w) -> {
+                    if (done != null) done.run();
+                })
+                .setNegativeButton("إلغاء", (dd, w) -> restore.run())
+                .create();
+        d.setOnCancelListener(x -> restore.run());
+        d.setOnKeyListener((dd, code, ev) -> {
+            boolean arrow = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                    || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+            if (!arrow) return false;
+            if (ev.getAction() != KeyEvent.ACTION_DOWN) return true;
+            int rc = ev.getRepeatCount();
+            int step = rc > 25 ? 5 : rc > 8 ? 2 : 1;
+            boolean up = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+            val[0] = Math.max(min, Math.min(max, val[0] + (up ? step : -step)));
+            refresh.run();
+            tick();
+            return true;
+        });
+        d.show();
+    }
+
+    /** Scrollable info dialog: Arabic text (RTL) plus an optional LTR block (paths, logs). */
+    private AlertDialog showInfo(String title, String rtl, String ltr, String posLabel,
+                                 final Runnable pos, String neuLabel, final Runnable neu,
+                                 String negLabel, final Runnable negAct) {
+        ScrollView sv = new ScrollView(this);
+        sv.setFocusable(true);                        // so the D-pad can scroll long text
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(22), dp(8), dp(22), dp(8));
+        if (rtl != null && !rtl.isEmpty()) {
+            TextView a = new TextView(this);
+            a.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
+            a.setTextColor(Color.WHITE);
+            a.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+            a.setTextDirection(View.TEXT_DIRECTION_RTL);
+            a.setGravity(Gravity.RIGHT);
+            a.setLineSpacing(0f, 1.15f);
+            a.setText(rtl);
+            box.addView(a);
+        }
+        if (ltr != null && !ltr.isEmpty()) {
+            TextView b = new TextView(this);
+            b.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(12));
+            b.setTextColor(0xFFCFE3DA);
+            b.setTypeface(Typeface.MONOSPACE);
+            b.setTextDirection(View.TEXT_DIRECTION_LTR);
+            b.setGravity(Gravity.LEFT);
+            b.setText(ltr);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(10);
+            box.addView(b, lp);
+        }
+        sv.addView(box);
+        AlertDialog.Builder b = dialog(title).setView(sv);
+        b.setPositiveButton(posLabel == null ? "حسناً" : posLabel, (d, w) -> {
+            if (pos != null) pos.run();
+        });
+        if (neuLabel != null) b.setNeutralButton(neuLabel, (d, w) -> {
+            if (neu != null) neu.run();
+        });
+        if (negLabel != null) b.setNegativeButton(negLabel, (d, w) -> {
+            if (negAct != null) negAct.run();
+        });
+        AlertDialog d = b.create();
+        d.show();
+        return d;
     }
 
     private void runShortcut(Shortcut s) {
@@ -2177,26 +2528,6 @@ public class MainActivity extends Activity {
         return b ? "تشغيل" : "إيقاف";
     }
 
-    /** Generic list dialog: label i runs acts[i]. */
-    private void menu(String title, List<String> labels, final List<Runnable> acts,
-                      final Runnable back) {
-        AlertDialog.Builder b = dialog(title).setItems(labels.toArray(new String[0]),
-                (d, which) -> acts.get(which).run());
-        if (back != null) b.setNegativeButton("رجوع", (d, w) -> back.run());
-        else b.setNegativeButton("إغلاق", null);
-        b.show();
-    }
-
-    /** Single-choice list; the current value is marked with ✓. */
-    private void choice(String title, String[] labels, int selected, final Pick p,
-                        final Runnable back) {
-        String[] l = new String[labels.length];
-        for (int i = 0; i < l.length; i++) l[i] = (i == selected ? "✓ " : "") + labels[i];
-        AlertDialog.Builder b = dialog(title).setItems(l, (d, which) -> p.on(which));
-        if (back != null) b.setNegativeButton("رجوع", (d, w) -> back.run());
-        b.show();
-    }
-
     private static int indexOf(int[] arr, int v, int def) {
         for (int i = 0; i < arr.length; i++) if (arr[i] == v) return i;
         return def;
@@ -2211,31 +2542,33 @@ public class MainActivity extends Activity {
         a.add(this::promptUrl);
         l.add("🌙  حماية الشاشة (الاختفاء والتعتيم والنوم)");
         a.add(this::showSaverSettings);
-        l.add("🧩  الشريط والتصنيفات والقائمة");
+        l.add("☰  الشريط والتصنيفات والقائمة");
         a.add(this::showStripSettings);
         l.add("🌦  بطاقة الطقس");
         a.add(this::showWeatherSettings);
         l.add("🕒  الوقت والتاريخ والمنطقة الزمنية");
         a.add(this::showTimeSettings);
-        l.add("🎛  الصوت والحركة والاستقرار");
+        l.add("🎛  الصوت والحركة والمظهر");
         a.add(this::showMotionSettings);
         l.add("🔄  التحديثات" + (pendingInfo != null ? "  ⬆ متاح" : ""));
         a.add(this::showUpdateSettings);
-        l.add("🚀  التشغيل عند الإقلاع: " + onOff(prefs.getBoolean("boot", true)));
+        l.add("🚀  التشغيل عند الإقلاع:  " + onOff(prefs.getBoolean("boot", true)));
         a.add(() -> {
             prefs.edit().putBoolean("boot", !prefs.getBoolean("boot", true)).apply();
             showLauncherSettings();
         });
         l.add("🔌  اتصال ADB الذاتي");
         a.add(this::showAdbDialog);
-        l.add("🧾  سجل الأخطاء");
+        l.add("📋  سجل الأخطاء ومشاركته");
         a.add(this::showLogDialog);
+        l.add("↩  إعادة ضبط اللانشر");
+        a.add(this::showReset);
         l.add("ℹ  حول التطبيق — الإصدار " + Updater.currentName(this));
         a.add(this::showAbout);
         menu("إعدادات Mawaqit Home", l, a, null);
     }
 
-    private void showStatus() {
+    private String statusText() {
         long now = System.currentTimeMillis();
         StringBuilder sb = new StringBuilder();
         sb.append("🌐 الإنترنت: ").append(online() ? "متصل ✓" : "غير متصل ✗").append("\n");
@@ -2270,10 +2603,49 @@ public class MainActivity extends Activity {
                             Updater.skewMs > 0 ? "متأخرة" : "متقدمة")).append("\n");
         }
         File f = AppLog.file();
-        sb.append("🧾 السجل: ").append(f != null ? (f.length() / 1024) + " KB" : "—");
-        dialog("لوحة الحالة").setMessage(sb.toString())
-                .setPositiveButton("حسناً", null)
-                .setNeutralButton("تحديث", (d, w) -> showStatus()).show();
+        sb.append("📋 السجل: ").append(f != null ? (f.length() / 1024) + " KB" : "—");
+        return sb.toString();
+    }
+
+    private void showStatus() {
+        showInfo("لوحة الحالة", statusText(), null, "حسناً", null, "تحديث", this::showStatus,
+                null, null);
+    }
+
+    private void showReset() {
+        showInfo("إعادة ضبط اللانشر",
+                "• إعادة الإعدادات: يعيد المظهر والأوقات وكل الخيارات إلى الأصل، ويحتفظ بالمفضلة "
+                        + "والتصنيفات والتطبيقات المخفية والرابط.\n\n"
+                        + "• إعادة كاملة: يمسح كل شيء (عدا اتصال ADB).",
+                null, "إعادة الإعدادات", () -> doReset(false), "إعادة كاملة", () -> doReset(true),
+                "إلغاء", null);
+    }
+
+    private void doReset(boolean full) {
+        java.util.Set<String> soft = new java.util.HashSet<>(Arrays.asList(
+                "favs", "order", "hidden", "cats", "url_v2"));
+        java.util.Set<String> always = new java.util.HashSet<>(Arrays.asList(
+                "last_code", "adb_state", "adb_ts"));
+        Map<String, Object> keep = new HashMap<>();
+        for (Map.Entry<String, ?> e : prefs.getAll().entrySet()) {
+            if (always.contains(e.getKey()) || (!full && soft.contains(e.getKey()))) {
+                keep.put(e.getKey(), e.getValue());
+            }
+        }
+        SharedPreferences.Editor ed = prefs.edit();
+        ed.clear();
+        for (Map.Entry<String, Object> e : keep.entrySet()) {
+            Object v = e.getValue();
+            if (v instanceof String) ed.putString(e.getKey(), (String) v);
+            else if (v instanceof Integer) ed.putInt(e.getKey(), (Integer) v);
+            else if (v instanceof Long) ed.putLong(e.getKey(), (Long) v);
+            else if (v instanceof Boolean) ed.putBoolean(e.getKey(), (Boolean) v);
+        }
+        ed.apply();
+        lastPos.clear();
+        AppLog.info("SETTINGS", "reset " + (full ? "full" : "settings"));
+        toast("تمت إعادة الضبط");
+        recreate();
     }
 
     // ---- time
@@ -2335,14 +2707,15 @@ public class MainActivity extends Activity {
     }
 
     private void showAbout() {
-        dialog("Mawaqit Home").setMessage("الإصدار: " + Updater.currentName(this)
-                + "  (build " + Updater.currentCode(this) + ")\n\n"
-                + "الصفحة: " + url + "\n"
-                + "© Moh-F — جميع الحقوق محفوظة\n\n"
-                + "بيانات الطقس: Open-Meteo.com (CC BY 4.0)\n"
-                + "أوقات الصلاة: Mawaqit / Aladhan • اتصال ADB: مكتبة dadb (Apache-2.0)\n\n"
-                + "السجل: " + (AppLog.file() != null ? AppLog.file().getAbsolutePath() : "—"))
-                .setPositiveButton("حسناً", null).show();
+        showInfo("Mawaqit Home",
+                "الإصدار: " + Updater.currentName(this) + "  (build " + Updater.currentCode(this) + ")\n"
+                        + "© Moh-F — جميع الحقوق محفوظة\n\n"
+                        + "بيانات الطقس: Open-Meteo.com (CC BY 4.0)\n"
+                        + "أوقات الصلاة: Mawaqit / Aladhan\n"
+                        + "اتصال ADB: مكتبة dadb (Apache-2.0)",
+                "الصفحة:\n" + url + "\n\nالسجل:\n"
+                        + (AppLog.file() != null ? AppLog.file().getAbsolutePath() : "—"),
+                "حسناً", null, null, null, null, null);
     }
 
     private void promptText(String title, String hint, String initial, final TextCb onOk) {
@@ -2383,7 +2756,12 @@ public class MainActivity extends Activity {
         for (int i = 0; i < STAGE_NAMES.length; i++) {
             final int si = i;
             l.add(STAGE_NAMES[i] + ":  " + minLabel(stageMinutes(i)));
-            a.add(() -> showMinutesChoice(si));
+            a.add(() -> numberDialog(STAGE_NAMES[si]
+                            + (si == 3 ? "\n(يحتاج أوقات الصلاة معروفة ليوقظه المنبّه قبل الأذان)" : ""),
+                    "t" + (si + 1), STAGE_DEFAULTS[si], 0, 240, " د", "متوقف", null, () -> {
+                        setStageMinutes(si, prefs.getInt("t" + (si + 1), STAGE_DEFAULTS[si]));
+                        showSaverSettings();
+                    }, this::showSaverSettings));
         }
         l.add("⚡ وضع تجربة سريع (1 / 2 / 3 دقائق)");
         a.add(() -> applyPreset(new int[]{1, 2, 3, 0}));
@@ -2400,18 +2778,6 @@ public class MainActivity extends Activity {
         showSaverSettings();
     }
 
-    private void showMinutesChoice(final int stageIdx) {
-        String[] items = new String[MINUTE_OPTIONS.length];
-        for (int i = 0; i < items.length; i++) items[i] = minLabel(MINUTE_OPTIONS[i]);
-        String extra = stageIdx == 3
-                ? "\n(يحتاج أوقات الصلاة معروفة ليوقظه المنبّه قبل الأذان)" : "";
-        choice(STAGE_NAMES[stageIdx] + extra, items,
-                indexOf(MINUTE_OPTIONS, stageMinutes(stageIdx), -1), i -> {
-                    setStageMinutes(stageIdx, MINUTE_OPTIONS[i]);
-                    showSaverSettings();
-                }, this::showSaverSettings);
-    }
-
     // ---- strip / categories / menu
 
     private void showStripSettings() {
@@ -2423,27 +2789,17 @@ public class MainActivity extends Activity {
                     prefs.edit().putInt("rows", i + 1).apply();
                     recreate();
                 }, this::showStripSettings));
-        final int[] tp = {70, 85, 100, 115, 130};
         l.add("🔲  حجم الأيقونات:  " + prefs.getInt("tile_pct", 100) + "%");
-        a.add(() -> choice("حجم الأيقونات", new String[]{"70%", "85%", "100%", "115%", "130%"},
-                indexOf(tp, prefs.getInt("tile_pct", 100), 2), i -> {
-                    prefs.edit().putInt("tile_pct", tp[i]).apply();
-                    recreate();
-                }, this::showStripSettings));
+        a.add(() -> numberDialog("حجم الأيقونات", "tile_pct", 100, 40, 150, "%", null, null,
+                this::recreate, this::showStripSettings));
         l.add("📐  ارتفاع منطقة الصفحة:  " + prefs.getInt("top_pct", 82) + "%");
-        a.add(() -> {
-            String[] p = new String[TOP_PCT_OPTIONS.length];
-            for (int i = 0; i < p.length; i++) p[i] = TOP_PCT_OPTIONS[i] + "%";
-            choice("ارتفاع منطقة الصفحة (قلّلها لو استخدمت صفين أو ثلاثة)", p,
-                    indexOf(TOP_PCT_OPTIONS, prefs.getInt("top_pct", 82), 4), i -> {
-                        prefs.edit().putInt("top_pct", TOP_PCT_OPTIONS[i]).apply();
-                        recreate();
-                    }, this::showStripSettings);
-        });
-        l.add("🖼  وضع عرض الصفحة:  " + (prefs.getInt("fit", 0) == 1 ? "ملء العرض" : "تصغير متناسب"));
+        a.add(() -> numberDialog("ارتفاع منطقة الصفحة (قلّله مع صفين أو ثلاثة)", "top_pct", 82, 55, 95,
+                "%", null, null, this::recreate, this::showStripSettings));
+        l.add("🖼  وضع عرض الصفحة:  " + (prefs.getInt("fit", 1) == 1 ? "ملء العرض" : "تصغير متناسب"));
         a.add(() -> choice("وضع عرض الصفحة",
-                new String[]{"تصغير متناسب: انتقال سلس جداً", "ملء العرض: الصفحة تُعاد هيكلتها"},
-                prefs.getInt("fit", 0), i -> {
+                new String[]{"تصغير متناسب: حركة سلسة جداً لكن تظهر أشرطة جانبية",
+                        "ملء العرض: الصفحة تملأ العرض بلا أشرطة (انتقال بتلاشي)"},
+                prefs.getInt("fit", 1) == 1 ? 1 : 0, i -> {
                     prefs.edit().putInt("fit", i).apply();
                     recreate();
                 }, this::showStripSettings));
@@ -2451,20 +2807,43 @@ public class MainActivity extends Activity {
         a.add(() -> choice("مظهر الشريط السفلي", STRIP_STYLES, prefs.getInt("strip_style", 2), i -> {
             prefs.edit().putInt("strip_style", i).apply();
             applyStripStyle();
+            applyWeatherStyle();
             if (i == 3) samplePageColor();
+            showTab(currentTab, -1);
             showStripSettings();
         }, this::showStripSettings));
-        l.add("🫧  شفافية الشريط:  " + prefs.getInt("strip_alpha", 92) + "%");
+        int pc = prefs.getInt("strip_col", 0);
+        l.add("🎨  لون الشريط والبطاقة:  " + PAL_NAMES[Math.min(pc, PAL_NAMES.length - 1)]);
+        a.add(() -> choice("لون الشريط والبطاقة", PAL_NAMES, prefs.getInt("strip_col", 0), i -> {
+            if (i < PAL_TOP.length) {
+                prefs.edit().putInt("strip_col", i).apply();
+                applyStripStyle();
+                applyWeatherStyle();
+                showStripSettings();
+            } else {
+                promptText("لون مخصص (#RRGGBB)", "#103A2C", prefs.getString("strip_hex", "#103A2C"),
+                        v -> {
+                            try {
+                                Color.parseColor(v);
+                                prefs.edit().putInt("strip_col", PAL_TOP.length)
+                                        .putString("strip_hex", v).apply();
+                                applyStripStyle();
+                                applyWeatherStyle();
+                            } catch (Exception e) {
+                                toast("صيغة اللون غير صحيحة، مثال: #103A2C");
+                            }
+                            showStripSettings();
+                        });
+            }
+        }, this::showStripSettings));
+        l.add("🔆  شفافية الشريط:  " + prefs.getInt("strip_alpha", 92) + "%");
+        a.add(() -> numberDialog("شفافية الشريط (100% = معتم، 0% = شفاف تماماً)", "strip_alpha", 92, 0,
+                100, "%", null, this::applyStripStyle, this::showStripSettings, this::showStripSettings));
+        l.add("🔳  ألواح الأيقونات المجسّمة:  " + onOff(prefs.getBoolean("tile_plate", true)));
         a.add(() -> {
-            final int[] vals = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
-            String[] s = new String[vals.length];
-            for (int i = 0; i < s.length; i++) s[i] = vals[i] + "%";
-            choice("كثافة الشريط (0% = شفاف تماماً)", s,
-                    indexOf(vals, prefs.getInt("strip_alpha", 92), -1), i -> {
-                        prefs.edit().putInt("strip_alpha", vals[i]).apply();
-                        applyStripStyle();
-                        showStripSettings();
-                    }, this::showStripSettings);
+            prefs.edit().putBoolean("tile_plate", !prefs.getBoolean("tile_plate", true)).apply();
+            showTab(currentTab, -1);
+            showStripSettings();
         });
         l.add("↔  مكان قائمة التصنيفات:  " + (railRight ? "اليمين" : "اليسار"));
         a.add(() -> choice("مكان قائمة التصنيفات", new String[]{"اليسار", "اليمين"},
@@ -2472,21 +2851,12 @@ public class MainActivity extends Activity {
                     prefs.edit().putInt("rail_side", i).apply();
                     recreate();
                 }, this::showStripSettings));
-        final int[] rs = {3, 4, 6, 8, 12};
         l.add("⏱  إخفاء القائمة تلقائياً بعد:  " + prefs.getInt("rail_secs", 6) + " ث");
-        a.add(() -> choice("إخفاء القائمة بعد", new String[]{"3 ثوانٍ", "4 ثوانٍ", "6 ثوانٍ",
-                        "8 ثوانٍ", "12 ثانية"}, indexOf(rs, prefs.getInt("rail_secs", 6), 2), i -> {
-                    prefs.edit().putInt("rail_secs", rs[i]).apply();
-                    showStripSettings();
-                }, this::showStripSettings));
-        final int[] zs = {100, 108, 114, 122, 130};
+        a.add(() -> numberDialog("إخفاء القائمة بعد", "rail_secs", 6, 2, 30, " ث", null, null,
+                this::showStripSettings, this::showStripSettings));
         l.add("🔍  تكبير الأيقونة المحددة:  " + prefs.getInt("zoom", 114) + "%");
-        a.add(() -> choice("تكبير الأيقونة عند التركيز",
-                new String[]{"بدون", "خفيف 108%", "متوسط 114%", "كبير 122%", "كبير جداً 130%"},
-                indexOf(zs, prefs.getInt("zoom", 114), 2), i -> {
-                    prefs.edit().putInt("zoom", zs[i]).apply();
-                    showStripSettings();
-                }, this::showStripSettings));
+        a.add(() -> numberDialog("تكبير الأيقونة عند التركيز", "zoom", 114, 100, 140, "%", null, null,
+                this::showStripSettings, this::showStripSettings));
         l.add("🗂  إدارة التصنيفات المخصصة (" + cats.size() + ")");
         a.add(this::showCategories);
         menu("الشريط والتصنيفات", l, a, this::showLauncherSettings);
@@ -2614,13 +2984,14 @@ public class MainActivity extends Activity {
     private void showWeatherSettings() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showWeatherSettings;
         l.add("👁  إظهار بطاقة الطقس:  " + onOff(prefs.getBoolean("w_show", true)));
         a.add(() -> {
             prefs.edit().putBoolean("w_show", !prefs.getBoolean("w_show", true)).apply();
             applyWeatherStyle();
             showWeatherSettings();
         });
-        l.add("🧭  موضع البطاقة:  " + weatherPosName());
+        l.add("📌  موضع البطاقة:  " + weatherPosName());
         a.add(() -> choice("موضع البطاقة",
                 new String[]{"أعلى اليمين", "أعلى اليسار", "أسفل اليمين", "أسفل اليسار",
                         "حرّكها بالريموت (أي مكان)"}, -1, i -> {
@@ -2632,30 +3003,31 @@ public class MainActivity extends Activity {
                     } else {
                         startWeatherMove();
                     }
-                }, this::showWeatherSettings));
+                }, back));
         l.add("↔  الإزاحة الأفقية:  " + prefs.getInt("w_x", 100) + "%");
-        a.add(() -> offsetChoice("w_x", "الإزاحة الأفقية (0 = أقصى اليسار، 100 = أقصى اليمين)"));
+        a.add(() -> numberDialog("الإزاحة الأفقية (0 = أقصى اليسار، 100 = أقصى اليمين)", "w_x", 100, 0,
+                100, "%", null, this::positionWeather, back, back));
         l.add("↕  الإزاحة الرأسية:  " + prefs.getInt("w_y", 0) + "%");
-        a.add(() -> offsetChoice("w_y", "الإزاحة الرأسية (0 = أعلى، 100 = أسفل منطقة الصفحة)"));
-        final int[] sz = {70, 85, 100, 120, 140};
+        a.add(() -> numberDialog("الإزاحة الرأسية (0 = أعلى، 100 = أسفل منطقة الصفحة)", "w_y", 0, 0,
+                100, "%", null, this::positionWeather, back, back));
         l.add("🔲  حجم البطاقة:  " + prefs.getInt("w_size", 100) + "%");
-        a.add(() -> choice("حجم البطاقة", new String[]{"70%", "85%", "100%", "120%", "140%"},
-                indexOf(sz, prefs.getInt("w_size", 100), 2), i -> {
-                    prefs.edit().putInt("w_size", sz[i]).apply();
+        a.add(() -> numberDialog("حجم البطاقة", "w_size", 100, 40, 220, "%", null, this::layoutWeather,
+                back, back));
+        l.add("🔆  شفافية البطاقة:  " + prefs.getInt("w_alpha", 55) + "%  (0 = شفافة تماماً)");
+        a.add(() -> numberDialog("شفافية البطاقة (0% = تذوب في الصفحة)", "w_alpha", 55, 0, 100, "%", null,
+                this::applyWeatherStyle, back, back));
+        l.add("🧱  شكل العرض:  " + (prefs.getInt("w_layout", 0) == 1 ? "أعمدة (أفقي)" : "صفوف (عمودي)"));
+        a.add(() -> choice("شكل عرض الأيام", new String[]{"صفوف: كل يوم في سطر", "أعمدة: الأيام الثلاثة جنب بعض"},
+                prefs.getInt("w_layout", 0), i -> {
+                    prefs.edit().putInt("w_layout", i).apply();
                     layoutWeather();
                     showWeatherSettings();
-                }, this::showWeatherSettings));
-        l.add("🫧  شفافية البطاقة:  " + prefs.getInt("w_alpha", 55) + "%  (0 = شفافة تماماً)");
+                }, back));
+        l.add("⇄  اتجاه الترتيب:  " + (prefs.getInt("w_flip", 0) == 1 ? "من اليسار لليمين" : "من اليمين لليسار"));
         a.add(() -> {
-            final int[] vals = {0, 10, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100};
-            String[] s = new String[vals.length];
-            for (int i = 0; i < s.length; i++) s[i] = vals[i] + "%";
-            choice("كثافة البطاقة (0% = تذوب في الصفحة، 100% = زجاج داكن)", s,
-                    indexOf(vals, prefs.getInt("w_alpha", 55), -1), i -> {
-                        prefs.edit().putInt("w_alpha", vals[i]).apply();
-                        applyWeatherStyle();
-                        showWeatherSettings();
-                    }, this::showWeatherSettings);
+            prefs.edit().putInt("w_flip", prefs.getInt("w_flip", 0) == 1 ? 0 : 1).apply();
+            layoutWeather();
+            showWeatherSettings();
         });
         l.add("📍  الموقع:  " + (manualLocation() ? currentCity() : "تلقائي (" + currentCity() + ")"));
         a.add(this::showLocationSettings);
@@ -2665,20 +3037,6 @@ public class MainActivity extends Activity {
             toast("جارٍ التحديث…");
         });
         menu("بطاقة الطقس", l, a, this::showLauncherSettings);
-    }
-
-    private void offsetChoice(final String key, String title) {
-        final int[] vals = new int[21];
-        String[] s = new String[21];
-        for (int i = 0; i < 21; i++) {
-            vals[i] = i * 5;
-            s[i] = vals[i] + "%";
-        }
-        choice(title, s, indexOf(vals, prefs.getInt(key, key.equals("w_x") ? 100 : 0), -1), i -> {
-            prefs.edit().putInt(key, vals[i]).apply();
-            positionWeather();
-            showWeatherSettings();
-        }, this::showWeatherSettings);
     }
 
     private void showLocationSettings() {
@@ -2738,27 +3096,33 @@ public class MainActivity extends Activity {
         l.add("🔊  أصوات التنقل واللمس:  " + onOff(prefs.getBoolean("sounds", true)));
         a.add(() -> {
             prefs.edit().putBoolean("sounds", !prefs.getBoolean("sounds", true)).apply();
+            applySounds(root);
+            getWindow().getDecorView().setSoundEffectsEnabled(prefs.getBoolean("sounds", true));
             showMotionSettings();
         });
-        final int[] an = {70, 100, 140};
-        l.add("🎞  سرعة الحركات:  " + (prefs.getInt("anim_pct", 100) < 100 ? "سريعة"
-                : prefs.getInt("anim_pct", 100) > 100 ? "بطيئة" : "عادية"));
-        a.add(() -> choice("سرعة الحركات", new String[]{"سريعة", "عادية", "بطيئة"},
-                indexOf(an, prefs.getInt("anim_pct", 100), 1), i -> {
-                    prefs.edit().putInt("anim_pct", an[i]).apply();
-                    showMotionSettings();
-                }, this::showMotionSettings));
+        l.add("🎬  مدة الحركات:  " + prefs.getInt("anim_pct", 100) + "%  (أقل = أسرع)");
+        a.add(() -> numberDialog("مدة الحركات (100% = عادية)", "anim_pct", 100, 30, 250, "%", null, null,
+                this::showMotionSettings, this::showMotionSettings));
         l.add("🖥  تحريك الشاشة قليلاً (يحمي من الاحتراق):  " + onOff(prefs.getBoolean("px_shift", true)));
         a.add(() -> {
             prefs.edit().putBoolean("px_shift", !prefs.getBoolean("px_shift", true)).apply();
             showMotionSettings();
         });
-        l.add("🛡  مراقب تجمّد الصفحة (يعيد التحميل تلقائياً):  " + onOff(prefs.getBoolean("watchdog", true)));
+        l.add("🔒  مراقب تجمّد الصفحة (يعيد التحميل تلقائياً):  " + onOff(prefs.getBoolean("watchdog", true)));
         a.add(() -> {
             prefs.edit().putBoolean("watchdog", !prefs.getBoolean("watchdog", true)).apply();
             showMotionSettings();
         });
-        menu("الصوت والحركة والاستقرار", l, a, this::showLauncherSettings);
+        l.add("🔆  شفافية نوافذ الإعدادات:  " + prefs.getInt("ui_alpha", 92) + "%");
+        a.add(() -> numberDialog("شفافية نوافذ الإعدادات (أقل = ترى اللانشر خلفها)", "ui_alpha", 92, 30, 100,
+                "%", null, null, this::showMotionSettings, this::showMotionSettings));
+        final String[] sides = {"اليسار", "الوسط", "اليمين"};
+        l.add("📌  مكان نوافذ الإعدادات:  " + sides[Math.max(0, Math.min(2, prefs.getInt("ui_side", 0)))]);
+        a.add(() -> choice("مكان نوافذ الإعدادات", sides, prefs.getInt("ui_side", 0), i -> {
+            prefs.edit().putInt("ui_side", i).apply();
+            showMotionSettings();
+        }, this::showMotionSettings));
+        menu("الصوت والحركة والمظهر", l, a, this::showLauncherSettings);
     }
 
     // ---- updates
@@ -2828,13 +3192,91 @@ public class MainActivity extends Activity {
 
     private void showLogDialog() {
         File f = AppLog.file();
-        dialog("سجل الأخطاء")
-                .setMessage((f != null ? f.getAbsolutePath() + "\n\n" : "") + AppLog.tail(25))
-                .setPositiveButton("حسناً", null)
-                .setNeutralButton("مسح السجل", (d, w) -> {
+        showInfo("سجل الأخطاء", "آخر الأحداث (للقراءة بالكامل استخدم «مشاركة عبر الشبكة»):",
+                (f != null ? f.getAbsolutePath() + "\n\n" : "") + AppLog.tail(40),
+                "حسناً", null, "مشاركة عبر الشبكة", this::startLogServer, "مسح السجل", () -> {
                     AppLog.clear();
                     toast("تم المسح");
-                }).show();
+                });
+    }
+
+    private String localIp() {
+        try {
+            Enumeration<NetworkInterface> nis = NetworkInterface.getNetworkInterfaces();
+            while (nis != null && nis.hasMoreElements()) {
+                Enumeration<InetAddress> as = nis.nextElement().getInetAddresses();
+                while (as.hasMoreElements()) {
+                    InetAddress a = as.nextElement();
+                    if (a instanceof Inet4Address && !a.isLoopbackAddress()) return a.getHostAddress();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private String reportText() {
+        return "Mawaqit Home " + Updater.currentName(this) + " (" + Updater.currentCode(this) + ")\n"
+                + "Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT
+                + ")  " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + "\n"
+                + "Screen " + sizeW + "x" + sizeH + "  density " + getResources().getDisplayMetrics().density + "\n\n"
+                + statusText() + "\n\n==== LOG ====\n" + AppLog.all();
+    }
+
+    /** Serves the full log on the local network for 10 minutes, behind a random link. */
+    private void startLogServer() {
+        final String ip = localIp();
+        if (ip == null) {
+            toast("لا يوجد اتصال شبكة محلي");
+            return;
+        }
+        stopLogServer();
+        final String token = Long.toString(Math.abs(new java.security.SecureRandom().nextLong()), 36)
+                .substring(0, 6);
+        try {
+            final ServerSocket ss = new ServerSocket(8765);
+            logSrv = ss;
+            new Thread(() -> {
+                while (!ss.isClosed()) {
+                    try {
+                        Socket c = ss.accept();
+                        try {
+                            BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()));
+                            String line = r.readLine();
+                            boolean ok = line != null && line.startsWith("GET /" + token);
+                            byte[] body = (ok ? reportText() : "not found").getBytes("UTF-8");
+                            OutputStream o = c.getOutputStream();
+                            o.write(("HTTP/1.1 " + (ok ? "200 OK" : "404 Not Found")
+                                    + "\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "
+                                    + body.length + "\r\nConnection: close\r\n\r\n").getBytes("UTF-8"));
+                            o.write(body);
+                            o.flush();
+                        } finally {
+                            c.close();
+                        }
+                    } catch (Exception e) {
+                        if (ss.isClosed()) break;
+                    }
+                }
+            }, "logsrv").start();
+            handler.postDelayed(this::stopLogServer, 10L * 60 * 1000);
+            AppLog.info("LOGSRV", "started on " + ip + ":8765");
+            showInfo("مشاركة السجل", "افتح هذا الرابط من متصفح الكمبيوتر أو الجوال (على نفس شبكة الواي فاي)، "
+                            + "ثم انسخ النص وأرسله لي. ينتهي الرابط تلقائياً بعد 10 دقائق.",
+                    "http://" + ip + ":8765/" + token, "حسناً", null, "إيقاف الآن", this::stopLogServer,
+                    null, null);
+        } catch (Exception e) {
+            AppLog.error("LOGSRV", "start failed", e);
+            toast("تعذّر تشغيل المشاركة");
+        }
+    }
+
+    private void stopLogServer() {
+        try {
+            if (logSrv != null) logSrv.close();
+        } catch (Exception ignored) {
+        }
+        logSrv = null;
     }
 
     // ------------------------------------------------- Favorites / hidden

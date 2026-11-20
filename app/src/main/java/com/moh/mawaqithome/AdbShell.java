@@ -35,8 +35,36 @@ public final class AdbShell {
         File pub = new File(c.getFilesDir(), "adbkey.pub");
         if (!priv.exists() || !pub.exists()) AdbKeyPair.generate(priv, pub);
         AdbKeyPair pair = AdbKeyPair.read(priv, pub);
-        dadb = Dadb.create("127.0.0.1", 5555, pair);
-        return dadb;
+        java.util.List<String> hosts = new java.util.ArrayList<>();
+        hosts.add("127.0.0.1");
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> nis =
+                    java.net.NetworkInterface.getNetworkInterfaces();
+            while (nis != null && nis.hasMoreElements()) {
+                java.util.Enumeration<java.net.InetAddress> as = nis.nextElement().getInetAddresses();
+                while (as.hasMoreElements()) {
+                    java.net.InetAddress ad = as.nextElement();
+                    if (ad instanceof java.net.Inet4Address && !ad.isLoopbackAddress()) {
+                        hosts.add(ad.getHostAddress());
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        Throwable last = null;
+        for (String h : hosts) {
+            try {
+                Dadb d = Dadb.create(h, 5555, pair);
+                d.shell("echo ok");               // forces the connection / auth now
+                dadb = d;
+                AppLog.info("ADB", "connected via " + h);
+                return d;
+            } catch (Throwable t) {
+                last = t;
+                AppLog.info("ADB", "connect " + h + " failed: " + t);
+            }
+        }
+        throw new Exception(String.valueOf(last), last);
     }
 
     private static synchronized void reset() {

@@ -87,6 +87,26 @@ public final class AppLog {
         }
     }
 
+    /** Whole log (previous file first) for sharing. */
+    public static synchronized String all() {
+        if (file == null) return "";
+        StringBuilder sb = new StringBuilder();
+        File old = new File(file.getParentFile(), "launcher.log.1");
+        for (File f : new File[]{old, file}) {
+            if (!f.exists()) continue;
+            try {
+                FileInputStream in = new FileInputStream(f);
+                byte[] data = new byte[(int) f.length()];
+                int n = 0, r;
+                while (n < data.length && (r = in.read(data, n, data.length - n)) > 0) n += r;
+                in.close();
+                sb.append(new String(data, 0, n, "UTF-8"));
+            } catch (Exception ignored) {
+            }
+        }
+        return sb.toString();
+    }
+
     public static synchronized void clear() {
         if (file != null) {
             //noinspection ResultOfMethodCallIgnored

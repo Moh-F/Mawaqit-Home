@@ -45,9 +45,12 @@ android {
         // targetSdk 28 on purpose (Fire OS 6 / sideloaded app); the Play-Store rule does not apply
         checkReleaseBuilds = false
         abortOnError = false
+        textReport = true
+        textOutput = file("stdout")
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true      // java.util.Base64 & co. on Fire OS 6 (API 25)
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
@@ -56,4 +59,5 @@ android {
 dependencies {
     // Talks to the device's own adb daemon (open hidden settings screens, sleep the device)
     implementation("dev.mobile:dadb:1.2.10")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }
