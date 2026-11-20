@@ -702,6 +702,8 @@ public class MainActivity extends Activity {
                 if (bubbleSticky) hideBubble();
                 handler.removeCallbacks(prayerTask);
                 handler.postDelayed(prayerTask, 5000L);
+                applyPageCss();
+                handler.postDelayed(MainActivity.this::applyPageCss, 2500L);
             }
 
             @TargetApi(23)
@@ -782,7 +784,7 @@ public class MainActivity extends Activity {
                         Double.parseDouble(prefs.getString("lon", ""))};
             }
             long age = System.currentTimeMillis() - prefs.getLong("ip_ts", 0L);
-            if (!prefs.contains("ip_lat") || age > 12L * 60 * 60 * 1000) ipLookup();
+            if (!prefs.contains("ip_lat") || !prefs.getBoolean("ip_fix", false) || age > 12L * 60 * 60 * 1000) ipLookup();
             if (prefs.contains("ip_lat")) {
                 return new double[]{Double.parseDouble(prefs.getString("ip_lat", "")),
                         Double.parseDouble(prefs.getString("ip_lon", ""))};
@@ -828,7 +830,7 @@ public class MainActivity extends Activity {
                 String city = properName(j.optString("city", ""), lat, lon);
                 prefs.edit().putString("ip_lat", Double.toString(lat))
                         .putString("ip_lon", Double.toString(lon))
-                        .putString("ip_city", city)
+                        .putString("ip_city", city).putBoolean("ip_fix", true)
                         .putLong("ip_ts", System.currentTimeMillis()).apply();
                 AppLog.info("LOC", "IP location: " + city + " " + lat + "," + lon);
                 return;
@@ -1628,6 +1630,11 @@ public class MainActivity extends Activity {
     private boolean online() {
         try {
             ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (Build.VERSION.SDK_INT >= 23) {
+                android.net.Network n = cm.getActiveNetwork();
+                android.net.NetworkCapabilities nc = n == null ? null : cm.getNetworkCapabilities(n);
+                return nc != null && nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            }
             NetworkInfo ni = cm.getActiveNetworkInfo();
             return ni != null && ni.isConnected();
         } catch (Exception e) {
@@ -2570,6 +2577,8 @@ public class MainActivity extends Activity {
         a.add(this::showStripSettings);
         l.add("🌦  بطاقة الطقس");
         a.add(this::showWeatherSettings);
+        l.add("🧩  تحريك عناصر صفحة المواقيت");
+        a.add(this::showPageElements);
         l.add("🕒  الوقت والتاريخ والمنطقة الزمنية");
         a.add(this::showTimeSettings);
         l.add("🎛  الصوت والحركة والمظهر");
@@ -3231,6 +3240,105 @@ public class MainActivity extends Activity {
                     AppLog.clear();
                     toast("تم المسح");
                 });
+    }
+
+    // ---- page element control (CSS injected into the live Mawaqit page)
+
+    private static final String[][] PG = {
+            {"head", "اسم المسجد (العنوان)", ".header"},
+            {"clock", "الساعة والثواني", ".currentTime"},
+            {"hijri", "التاريخ الهجري", ".center-time > span"},
+            {"greg", "التاريخ الميلادي", "#gregorianDate"},
+            {"next", "الوقت المتبقي للصلاة القادمة", ".next-prayer-bloc"},
+            {"shur", "الشروق", ".chourouk"},
+            {"jum", "الجمعة", ".joumouaa"},
+            {"pall", "الصلوات الخمس (الصف كله)", ".prayers"},
+            {"p1", "الفجر", ".prayers > div:nth-child(1)"},
+            {"p2", "الظهر", ".prayers > div:nth-child(2)"},
+            {"p3", "العصر", ".prayers > div:nth-child(3)"},
+            {"p4", "المغرب", ".prayers > div:nth-child(4)"},
+            {"p5", "العشاء", ".prayers > div:nth-child(5)"},
+            {"logo", "الشعار والإصدار", ".logo, .version"},
+    };
+
+    private String pgSummary(String k) {
+        if (prefs.getBoolean("pg_" + k + "_h", false)) return "مخفي";
+        int x = prefs.getInt("pg_" + k + "_x", 0), y = prefs.getInt("pg_" + k + "_y", 0),
+                z = prefs.getInt("pg_" + k + "_s", 100);
+        return x == 0 && y == 0 && z == 100 ? "افتراضي" : "↔" + x + "  ↕" + y + "  🔍" + z + "%";
+    }
+
+    private void applyPageCss() {
+        StringBuilder css = new StringBuilder();
+        for (String[] e : PG) {
+            String k = e[0];
+            int x = prefs.getInt("pg_" + k + "_x", 0), y = prefs.getInt("pg_" + k + "_y", 0),
+                    z = prefs.getInt("pg_" + k + "_s", 100);
+            boolean h = prefs.getBoolean("pg_" + k + "_h", false);
+            if (!h && x == 0 && y == 0 && z == 100) continue;
+            css.append(e[2]).append("{");
+            if (h) css.append("visibility:hidden!important;");
+            else css.append("transform:translate(").append(x).append("vw,").append(y)
+                    .append("vh) scale(").append(z / 100f).append(")!important;");
+            css.append("}");
+        }
+        String js = "(function(){window.__mhcss=" + JSONObject.quote(css.toString()) + ";"
+                + "function ap(){var s=document.getElementById('mh-style');"
+                + "if(!s){s=document.createElement('style');s.id='mh-style';(document.head||document.body).appendChild(s);}"
+                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;}"
+                + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);})()";
+        webView.evaluateJavascript(js, null);
+    }
+
+    private void showPageElements() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        for (final String[] e : PG) {
+            l.add(e[1] + ":  " + pgSummary(e[0]));
+            a.add(() -> showPageElement(e));
+        }
+        l.add("↩  إعادة كل العناصر لمكانها الأصلي");
+        a.add(() -> {
+            SharedPreferences.Editor ed = prefs.edit();
+            for (String[] e : PG) {
+                ed.remove("pg_" + e[0] + "_x").remove("pg_" + e[0] + "_y")
+                        .remove("pg_" + e[0] + "_s").remove("pg_" + e[0] + "_h");
+            }
+            ed.apply();
+            applyPageCss();
+            showPageElements();
+        });
+        menu("تحريك عناصر صفحة المواقيت", l, a, this::showLauncherSettings);
+    }
+
+    private void showPageElement(final String[] e) {
+        final String k = e[0];
+        final Runnable back = () -> showPageElement(e);
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("↔  إزاحة أفقية:  " + prefs.getInt("pg_" + k + "_x", 0) + "  (سالب = يسار)");
+        a.add(() -> numberDialog(e[1] + " — إزاحة أفقية (% من عرض الصفحة)", "pg_" + k + "_x", 0, -100, 100,
+                "", null, this::applyPageCss, back, back));
+        l.add("↕  إزاحة رأسية:  " + prefs.getInt("pg_" + k + "_y", 0) + "  (سالب = أعلى)");
+        a.add(() -> numberDialog(e[1] + " — إزاحة رأسية (% من ارتفاع الصفحة)", "pg_" + k + "_y", 0, -100, 100,
+                "", null, this::applyPageCss, back, back));
+        l.add("🔍  الحجم:  " + prefs.getInt("pg_" + k + "_s", 100) + "%");
+        a.add(() -> numberDialog(e[1] + " — الحجم", "pg_" + k + "_s", 100, 20, 300, "%", null,
+                this::applyPageCss, back, back));
+        l.add("👁  الإخفاء:  " + (prefs.getBoolean("pg_" + k + "_h", false) ? "مخفي" : "ظاهر"));
+        a.add(() -> {
+            prefs.edit().putBoolean("pg_" + k + "_h", !prefs.getBoolean("pg_" + k + "_h", false)).apply();
+            applyPageCss();
+            showPageElement(e);
+        });
+        l.add("↩  إعادة هذا العنصر لمكانه");
+        a.add(() -> {
+            prefs.edit().remove("pg_" + k + "_x").remove("pg_" + k + "_y").remove("pg_" + k + "_s")
+                    .remove("pg_" + k + "_h").apply();
+            applyPageCss();
+            showPageElement(e);
+        });
+        menu(e[1], l, a, this::showPageElements);
     }
 
     private String domDump = "";
