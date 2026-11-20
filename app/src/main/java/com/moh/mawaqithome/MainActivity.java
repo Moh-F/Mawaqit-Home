@@ -24,7 +24,7 @@ import android.graphics.Canvas;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.app.Dialog;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.DialogInterface;
@@ -2164,56 +2164,267 @@ public class MainActivity extends Activity {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
-    private AlertDialog.Builder dialog(String title) {
-        // Arabic UI: every dialog is laid out right-to-left and styled like the launcher
-        return new AlertDialog.Builder(this, R.style.LauncherDialog) {
-            @Override public AlertDialog create() {
-                AlertDialog d = super.create();
-                styleDialog(d);
-                return d;
-            }
-        }.setTitle(title);
+    /** Our own dialog: no AlertDialog internals, so width, padding and alignment are fully ours. */
+    private class Dlg extends Dialog {
+        ListView listView;
+        View focusFirst;
+
+        Dlg() {
+            super(MainActivity.this, R.style.LauncherDialog);
+        }
+
+        ListView getListView() { return listView; }
     }
 
-    private void styleDialog(final AlertDialog d) {
-        final Window w = d.getWindow();
-        if (w == null) return;
-        View dv = w.getDecorView();
-        // Layout stays LTR on purpose (old Fire OS mishandles RTL window decor and pushes content
-        // off-screen); Arabic alignment is done explicitly per text view instead.
-        dv.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        int pct = Math.max(30, Math.min(100, prefs.getInt("ui_alpha", 92)));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(argb(pct * 255 / 100, 0x0B, 0x1E, 0x17));
-        bg.setCornerRadius(dp(22));
-        bg.setStroke(dp(1), argb(pct * 130 / 100, 0xF4, 0xC9, 0x5D));
-        w.setBackgroundDrawable(bg);
-        if (pct < 90) w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-        else w.setDimAmount(0.45f);
-        d.setOnShowListener(x -> {
-            applySounds(w.getDecorView());
-            int sw = getResources().getDisplayMetrics().widthPixels;
-            int sh = getResources().getDisplayMetrics().heightPixels;
-            int side = prefs.getInt("ui_side", 0);        // 0 left, 1 centre, 2 right
-            int width = Math.min(sw - dp(40), Math.max(dp(360), Math.round(sw * 0.40f)));
-            w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
-            WindowManager.LayoutParams lp = w.getAttributes();
-            lp.gravity = (side == 0 ? Gravity.LEFT : side == 2 ? Gravity.RIGHT
-                    : Gravity.CENTER_HORIZONTAL) | Gravity.CENTER_VERTICAL;
-            lp.x = side == 1 ? 0 : dp(28);
-            lp.y = 0;
-            w.setAttributes(lp);
-            int tid = getResources().getIdentifier("alertTitle", "id", "android");
-            View tt = tid != 0 ? d.findViewById(tid) : null;
-            if (tt instanceof TextView) {
-                TextView t = (TextView) tt;
-                t.setTextDirection(View.TEXT_DIRECTION_RTL);
-                t.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-                t.setSingleLine(false);
-                ViewGroup.LayoutParams tl = t.getLayoutParams();
-                if (tl != null) { tl.width = ViewGroup.LayoutParams.MATCH_PARENT; t.setLayoutParams(tl); }
+    /** Caps its height so long lists/messages scroll instead of leaving the screen. */
+    private class CapFrame extends FrameLayout {
+        final int maxH;
+
+        CapFrame(int maxH) {
+            super(MainActivity.this);
+            this.maxH = maxH;
+        }
+
+        @Override protected void onMeasure(int w, int h) {
+            super.onMeasure(w, MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST));
+        }
+    }
+
+    private class DlgBuilder {
+        final String title;
+        CharSequence msg;
+        View view;
+        BaseAdapter adapter;
+        DialogInterface.OnClickListener itemL;
+        final String[] btnText = new String[3];
+        final DialogInterface.OnClickListener[] btnL = new DialogInterface.OnClickListener[3];
+        boolean multi;
+        boolean[] checked;
+        DialogInterface.OnMultiChoiceClickListener multiL;
+        String[] multiNames;
+
+        DlgBuilder(String t) { title = t; }
+
+        DlgBuilder setMessage(CharSequence m) { msg = m; return this; }
+
+        DlgBuilder setView(View v) { view = v; return this; }
+
+        DlgBuilder setAdapter(BaseAdapter a, DialogInterface.OnClickListener l) {
+            adapter = a;
+            itemL = l;
+            return this;
+        }
+
+        DlgBuilder setItems(String[] items, DialogInterface.OnClickListener l) {
+            return setAdapter(new MenuAdapter(items, -1), l);
+        }
+
+        DlgBuilder setMultiChoiceItems(String[] names, boolean[] on,
+                                       DialogInterface.OnMultiChoiceClickListener l) {
+            multi = true;
+            multiNames = names;
+            checked = on;
+            multiL = l;
+            return this;
+        }
+
+        DlgBuilder setPositiveButton(CharSequence t, DialogInterface.OnClickListener l) {
+            btnText[2] = t.toString();
+            btnL[2] = l;
+            return this;
+        }
+
+        DlgBuilder setNegativeButton(CharSequence t, DialogInterface.OnClickListener l) {
+            btnText[0] = t.toString();
+            btnL[0] = l;
+            return this;
+        }
+
+        DlgBuilder setNeutralButton(CharSequence t, DialogInterface.OnClickListener l) {
+            btnText[1] = t.toString();
+            btnL[1] = l;
+            return this;
+        }
+
+        Dlg show() {
+            Dlg d = create();
+            d.show();
+            return d;
+        }
+
+        Dlg create() {
+            final Dlg d = new Dlg();
+            d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            final android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int pct = Math.max(30, Math.min(100, prefs.getInt("ui_alpha", 92)));
+            LinearLayout root = new LinearLayout(MainActivity.this);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(argb(pct * 255 / 100, 0x0B, 0x1E, 0x17));
+            bg.setCornerRadius(dp(22));
+            bg.setStroke(dp(1), argb(Math.min(255, pct * 255 / 100), 0xF4, 0xC9, 0x5D));
+            root.setBackground(bg);
+            root.setPadding(dp(10), dp(6), dp(10), dp(10));
+
+            TextView tt = new TextView(MainActivity.this);
+            tt.setText(title);
+            tt.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(21));
+            tt.setTypeface(Typeface.DEFAULT_BOLD);
+            tt.setTextColor(0xFFF4C95D);
+            tt.setTextDirection(View.TEXT_DIRECTION_RTL);
+            tt.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+            tt.setPadding(dp(16), dp(14), dp(16), dp(10));
+            root.addView(tt, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            int maxH = Math.max(dp(160), Math.round(dm.heightPixels * 0.90f) - dp(150));
+            CapFrame body = new CapFrame(maxH);
+            if (adapter != null || multi) {
+                final BaseAdapter ad;
+                if (multi) {
+                    ad = new BaseAdapter() {
+                        @Override public int getCount() { return multiNames.length; }
+                        @Override public Object getItem(int i) { return multiNames[i]; }
+                        @Override public long getItemId(int i) { return i; }
+                        @Override public View getView(int p, View cv, ViewGroup par) {
+                            TextView t = cv instanceof TextView ? (TextView) cv : newMenuRow();
+                            t.setText((checked[p] ? "☑  " : "☐  ") + multiNames[p]);
+                            return t;
+                        }
+                    };
+                } else {
+                    ad = adapter;
+                }
+                final ListView lv = new ListView(MainActivity.this);
+                lv.setAdapter(ad);
+                lv.setSelector(new ColorDrawable(Color.TRANSPARENT));
+                lv.setDivider(new ColorDrawable(Color.TRANSPARENT));
+                lv.setDividerHeight(dp(3));
+                lv.setPadding(dp(4), dp(4), dp(4), dp(4));
+                lv.setClipToPadding(false);
+                lv.setVerticalScrollBarEnabled(false);
+                lv.setOnItemClickListener((p, v, pos, id) -> {
+                    if (multi) {
+                        checked[pos] = !checked[pos];
+                        ((BaseAdapter) lv.getAdapter()).notifyDataSetChanged();
+                        if (multiL != null) multiL.onClick(d, pos, checked[pos]);
+                    } else {
+                        d.dismiss();
+                        if (itemL != null) itemL.onClick(d, pos);
+                    }
+                });
+                d.listView = lv;
+                body.addView(lv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+            } else if (view != null) {
+                body.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+            } else if (msg != null) {
+                ScrollView sv = new ScrollView(MainActivity.this);
+                sv.setFocusable(true);
+                TextView mt = new TextView(MainActivity.this);
+                mt.setText(msg);
+                mt.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
+                mt.setTextColor(Color.WHITE);
+                mt.setLineSpacing(0f, 1.15f);
+                mt.setTextDirection(View.TEXT_DIRECTION_RTL);
+                mt.setGravity(Gravity.RIGHT);
+                mt.setPadding(dp(16), dp(4), dp(16), dp(8));
+                sv.addView(mt, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                body.addView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
             }
-        });
+            root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+            row.setGravity(Gravity.CENTER);
+            boolean any = false;
+            View firstBtn = null;
+            for (int i = 0; i < 3; i++) {                  // left to right: cancel, neutral, OK
+                if (btnText[i] == null) continue;
+                any = true;
+                final int which = i;
+                TextView bt = new TextView(MainActivity.this);
+                bt.setText(btnText[i]);
+                bt.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(16));
+                bt.setTypeface(Typeface.DEFAULT_BOLD);
+                bt.setTextColor(i == 2 ? 0xFFF4C95D : Color.WHITE);
+                bt.setGravity(Gravity.CENTER);
+                bt.setSingleLine(false);
+                bt.setMinHeight(dp(46));
+                bt.setPadding(dp(10), dp(6), dp(10), dp(6));
+                bt.setFocusable(true);
+                bt.setClickable(true);
+                GradientDrawable on = new GradientDrawable();
+                on.setColor(0x33F4C95D);
+                on.setStroke(dp(2), 0xFFF4C95D);
+                on.setCornerRadius(dp(12));
+                GradientDrawable off = new GradientDrawable();
+                off.setColor(0x22FFFFFF);
+                off.setCornerRadius(dp(12));
+                StateListDrawable sl = new StateListDrawable();
+                sl.addState(new int[]{android.R.attr.state_focused}, on);
+                sl.addState(new int[]{android.R.attr.state_pressed}, on);
+                sl.addState(new int[]{}, off);
+                bt.setBackground(sl);
+                bt.setOnClickListener(v -> {
+                    d.dismiss();
+                    if (btnL[which] != null) btnL[which].onClick(d, which == 2 ? DialogInterface.BUTTON_POSITIVE
+                            : which == 1 ? DialogInterface.BUTTON_NEUTRAL : DialogInterface.BUTTON_NEGATIVE);
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                lp.setMargins(dp(5), dp(8), dp(5), 0);
+                row.addView(bt, lp);
+                if (i == 2 || firstBtn == null) firstBtn = bt;
+            }
+            if (!any) {                                    // plain close button
+                TextView bt = new TextView(MainActivity.this);
+                bt.setText("إغلاق");
+                bt.setTextColor(Color.WHITE);
+                bt.setGravity(Gravity.CENTER);
+                bt.setMinHeight(dp(46));
+                bt.setFocusable(true);
+                bt.setOnClickListener(v -> d.dismiss());
+                row.addView(bt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                firstBtn = bt;
+            }
+            d.focusFirst = firstBtn;
+            root.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            int width = Math.min(dm.widthPixels - dp(40), Math.max(dp(380), Math.round(dm.widthPixels * 0.40f)));
+            d.setContentView(root, new ViewGroup.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
+            final Window w = d.getWindow();
+            if (w != null) {
+                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+                if (pct < 90) w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                else w.setDimAmount(0.45f);
+                w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+                WindowManager.LayoutParams lp = w.getAttributes();
+                int side = prefs.getInt("ui_side", 0);       // 0 left, 1 centre, 2 right
+                lp.gravity = (side == 0 ? Gravity.LEFT : side == 2 ? Gravity.RIGHT
+                        : Gravity.CENTER_HORIZONTAL) | Gravity.CENTER_VERTICAL;
+                lp.x = side == 1 ? 0 : dp(28);
+                lp.y = 0;
+                w.setAttributes(lp);
+            }
+            d.setOnShowListener(x -> {
+                if (w != null) applySounds(w.getDecorView());
+                if (d.listView != null) d.listView.requestFocus();
+                else if (d.focusFirst != null) d.focusFirst.requestFocus();
+            });
+            return d;
+        }
+    }
+
+    private DlgBuilder dialog(String title) {
+        return new DlgBuilder(title);
     }
 
     /** Recursively applies the "sounds" setting (the framework plays focus sounds from the decor). */
@@ -2276,20 +2487,15 @@ public class MainActivity extends Activity {
     private void listDialog(final String title, final String[] labels, int initial,
                             final Pick pick, final Runnable back) {
         final MenuAdapter ad = new MenuAdapter(labels, initial);
-        AlertDialog.Builder b = dialog(title).setAdapter(ad, (d, which) -> {
+        DlgBuilder b = dialog(title).setAdapter(ad, (d, which) -> {
             lastPos.put(title, which);
             pick.on(which);
         });
         if (back != null) b.setNegativeButton("رجوع", (d, w) -> back.run());
         else b.setNegativeButton("إغلاق", null);
-        final AlertDialog d = b.create();
+        final Dlg d = b.create();
         d.show();
         final ListView lv = d.getListView();
-        lv.setSelector(new ColorDrawable(Color.TRANSPARENT));
-        lv.setDivider(new ColorDrawable(Color.TRANSPARENT));
-        lv.setDividerHeight(dp(3));
-        lv.setPadding(dp(8), dp(4), dp(8), dp(4));
-        lv.setClipToPadding(false);
         lv.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
                 lastPos.put(title, pos);
@@ -2380,7 +2586,7 @@ public class MainActivity extends Activity {
             if (live != null) live.run();
             if (back != null) back.run();
         };
-        final AlertDialog d = dialog(title).setView(box)
+        final Dlg d = dialog(title).setView(box)
                 .setPositiveButton("حفظ", (dd, w) -> {
                     if (done != null) done.run();
                 })
@@ -2404,7 +2610,7 @@ public class MainActivity extends Activity {
     }
 
     /** Scrollable info dialog: Arabic text (RTL) plus an optional LTR block (paths, logs). */
-    private AlertDialog showInfo(String title, String rtl, String ltr, String posLabel,
+    private Dlg showInfo(String title, String rtl, String ltr, String posLabel,
                                  final Runnable pos, String neuLabel, final Runnable neu,
                                  String negLabel, final Runnable negAct) {
         ScrollView sv = new ScrollView(this);
@@ -2437,7 +2643,7 @@ public class MainActivity extends Activity {
             box.addView(b, lp);
         }
         sv.addView(box);
-        AlertDialog.Builder b = dialog(title).setView(sv);
+        DlgBuilder b = dialog(title).setView(sv);
         b.setPositiveButton(posLabel == null ? "حسناً" : posLabel, (d, w) -> {
             if (pos != null) pos.run();
         });
@@ -2447,7 +2653,7 @@ public class MainActivity extends Activity {
         if (negLabel != null) b.setNegativeButton(negLabel, (d, w) -> {
             if (negAct != null) negAct.run();
         });
-        AlertDialog d = b.create();
+        Dlg d = b.create();
         d.show();
         return d;
     }
@@ -3250,7 +3456,7 @@ public class MainActivity extends Activity {
     private void showLogDialog() {
         File f = AppLog.file();
         showInfo("سجل الأخطاء", "آخر الأحداث (للقراءة بالكامل استخدم «مشاركة عبر الشبكة»):",
-                (f != null ? f.getAbsolutePath() + "\\n\\n" : "") + AppLog.tail(40),
+                (f != null ? f.getAbsolutePath() + "\n\n" : "") + AppLog.tail(40),
                 "مشاركة عبر الشبكة", this::startLogServer, "فحص بنية الصفحة", this::inspectPage,
                 "مسح السجل", () -> {
                     AppLog.clear();
