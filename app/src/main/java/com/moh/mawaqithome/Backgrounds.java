@@ -165,4 +165,123 @@ final class Backgrounds {
             h.disconnect();
         }
     }
+
+    // ------------------------------------------------------------------ video
+
+    static final int V_WIKI = 1, V_PEXELS = 2, V_OWN = 4;
+
+    interface VCb {
+        void done(boolean ok, String url, String credit, String err);
+    }
+
+    /** Picks a short free video; nothing is downloaded, the page streams the returned https URL. */
+    static void fetchVideo(final int sources, final String ownLinks, final String pexelsKey,
+                           final String topic, final VCb cb) {
+        new Thread(() -> {
+            List<Integer> order = new ArrayList<>();
+            if ((sources & V_WIKI) != 0) order.add(V_WIKI);
+            if ((sources & V_PEXELS) != 0 && pexelsKey != null && pexelsKey.trim().length() > 8) order.add(V_PEXELS);
+            if ((sources & V_OWN) != 0) order.add(V_OWN);
+            Collections.shuffle(order);
+            String lastErr = "no video source selected";
+            for (int src : order) {
+                try {
+                    String[] r = pickVideo(src, ownLinks, pexelsKey, topic);
+                    if (r == null) { lastErr = "video source " + src + ": nothing found"; continue; }
+                    cb.done(true, r[0], r[1], null);
+                    return;
+                } catch (Exception e) {
+                    lastErr = "video source " + src + ": " + e;
+                }
+            }
+            cb.done(false, null, null, lastErr);
+        }, "bg-video").start();
+    }
+
+    private static String[] pickVideo(int src, String own, String key, String topic) throws Exception {
+        Random rnd = new Random();
+        if (src == V_OWN) {
+            List<String> links = links(own);
+            if (links.isEmpty()) return null;
+            return new String[]{links.get(rnd.nextInt(links.size())), "رابط خاص"};
+        }
+        if (src == V_PEXELS) {
+            HttpURLConnection h = openAuth("https://api.pexels.com/videos/search?query="
+                    + java.net.URLEncoder.encode(topic, "UTF-8")
+                    + "&orientation=landscape&size=medium&per_page=40&page=" + (1 + rnd.nextInt(3)), key.trim());
+            String j;
+            try (InputStream in = h.getInputStream()) { j = readAll(in); } finally { h.disconnect(); }
+            JSONArray vs = new JSONObject(j).optJSONArray("videos");
+            if (vs == null) return null;
+            List<String[]> ok = new ArrayList<>();
+            for (int i = 0; i < vs.length(); i++) {
+                JSONObject v = vs.getJSONObject(i);
+                if (v.optInt("duration") > 90) continue;
+                JSONArray fl = v.optJSONArray("video_files");
+                String best = null;
+                int bw = 0;
+                for (int k = 0; fl != null && k < fl.length(); k++) {
+                    JSONObject f = fl.getJSONObject(k);
+                    int w = f.optInt("width");
+                    if (!"video/mp4".equals(f.optString("file_type")) || w > 1920 || w < 1280) continue;
+                    if (w > bw) { bw = w; best = f.optString("link"); }
+                }
+                if (best != null) ok.add(new String[]{best, "Pexels — " + v.getJSONObject("user").optString("name")});
+            }
+            return ok.isEmpty() ? null : ok.get(rnd.nextInt(ok.size()));
+        }
+        // Wikimedia Commons: short nature/landscape clips, smallest VP9/WebM transcode >= 480p
+        String j = get("https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch="
+                + java.net.URLEncoder.encode("filetype:video " + topic, "UTF-8")
+                + "&gsrnamespace=6&gsrlimit=40&gsroffset=" + rnd.nextInt(80)
+                + "&prop=videoinfo&viprop=url%7Csize%7Cderivatives%7Cextmetadata&format=json");
+        JSONObject q = new JSONObject(j).optJSONObject("query");
+        if (q == null) return null;
+        JSONObject pages = q.getJSONObject("pages");
+        List<String[]> ok = new ArrayList<>();
+        for (Iterator<String> it = pages.keys(); it.hasNext(); ) {
+            JSONObject pg = pages.getJSONObject(it.next());
+            JSONArray vi = pg.optJSONArray("videoinfo");
+            if (vi == null || vi.length() == 0) continue;
+            JSONObject v = vi.getJSONObject(0);
+            double dur = v.optDouble("duration", 0);
+            if (dur < 4 || dur > 150) continue;
+            JSONArray dv = v.optJSONArray("derivatives");
+            String best = null;
+            int bh = 0;
+            for (int k = 0; dv != null && k < dv.length(); k++) {
+                JSONObject d = dv.getJSONObject(k);
+                String ty = d.optString("type");
+                int hgt = d.optInt("height");
+                if (!ty.startsWith("video/webm") || hgt < 480 || hgt > 1080) continue;
+                if (best == null || hgt < bh) { bh = hgt; best = d.optString("src"); }
+            }
+            if (best == null) continue;
+            if (best.startsWith("//")) best = "https:" + best;
+            JSONObject em = v.optJSONObject("extmetadata");
+            String artist = em == null || em.optJSONObject("Artist") == null ? ""
+                    : em.getJSONObject("Artist").optString("value", "").replaceAll("<[^>]*>", "").trim();
+            ok.add(new String[]{best, "Wikimedia Commons — " + artist});
+        }
+        return ok.isEmpty() ? null : ok.get(rnd.nextInt(ok.size()));
+    }
+
+    private static HttpURLConnection openAuth(String u, String key) throws Exception {
+        HttpURLConnection h = (HttpURLConnection) new URL(u).openConnection();
+        h.setConnectTimeout(15000);
+        h.setReadTimeout(30000);
+        h.setRequestProperty("User-Agent", UA);
+        h.setRequestProperty("Authorization", key);
+        int code = h.getResponseCode();
+        if (code != 200) throw new Exception("HTTP " + code + (code == 401 ? " (مفتاح Pexels غير صحيح)" : ""));
+        return h;
+    }
+
+    private static String readAll(InputStream in) throws Exception {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+        return b.toString("UTF-8");
+    }
 }

@@ -46,6 +46,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.InputType;
+import android.text.Layout;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.TextUtils;
@@ -675,7 +676,7 @@ public class MainActivity extends Activity {
 
     private void applyWeatherVis(boolean animate) {
         if (weatherCard == null || !prefs.getBoolean("w_show", true)) return;
-        boolean visible = stage == 0 && (pageMain || !prefs.getBoolean("w_hide_adhan", true));
+        boolean visible = (pageMain || !prefs.getBoolean("w_hide_adhan", true));
         weatherCard.animate().alpha(visible ? 1f : 0f).setDuration(animate ? ms(600L) : 0L).start();
     }
 
@@ -1107,7 +1108,8 @@ public class MainActivity extends Activity {
     }
 
     private void setPx(TextView t, float size) {
-        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, wsc(size) * Math.max(60, Math.min(200, prefs.getInt("font_pct", 100))) / 100f);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, wsc(size) * Math.max(60, Math.min(200, prefs.getInt("font_pct", 100)))
+                / 100f * Math.max(50, Math.min(250, prefs.getInt("w_font", 100))) / 100f);
     }
 
     private void buildWeatherCard() {
@@ -1193,7 +1195,26 @@ public class MainActivity extends Activity {
         sp.bottomMargin = wsc(3);
         wSep.setLayoutParams(sp);
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
-        final int gap = wsc(prefs.getInt("w_gap", 6));
+        final int gap = wsc(prefs.getInt("w_gap", 4));
+        if (!cols) {                                   // measure real text so columns hug their content
+            int dW = 0, iW = 0, tW = 0;
+            for (int i = 0; i < 3; i++) {
+                setPx(wDay[i], 12);
+                setPx(wTemp[i], 15);
+                setPx(wSub[i], 10);
+                setPx(wIcon[i], 26);
+                if (i >= Math.max(1, Math.min(3, prefs.getInt("w_days", 3)))) continue;
+                dW = Math.max(dW, (int) Math.ceil(Layout.getDesiredWidth(wDay[i].getText(), wDay[i].getPaint())));
+                iW = Math.max(iW, (int) Math.ceil(Layout.getDesiredWidth(wIcon[i].getText(), wIcon[i].getPaint())));
+                int t = (int) Math.ceil(Layout.getDesiredWidth(wTemp[i].getText(), wTemp[i].getPaint()));
+                int sub = wSub[i].getVisibility() == View.GONE ? 0 : Math.min(wsc(200),
+                        (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint())));
+                tW = Math.max(tW, Math.max(t, sub));
+            }
+            wRowDay = dW > 0 ? dW + wsc(4) : wsc(80);
+            wRowIcon = iW > 0 ? iW + wsc(4) : wsc(34);
+            wRowTemp = tW > 0 ? tW + wsc(4) : wsc(128);
+        }
         final int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
         weatherCity.setVisibility(prefs.getBoolean("w_city", true) ? View.VISIBLE : View.GONE);
         weatherAge.setVisibility(prefs.getBoolean("w_age", true) ? View.VISIBLE : View.GONE);
@@ -1223,16 +1244,16 @@ public class MainActivity extends Activity {
                     : al == 2 ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL);
             wDay[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : mlp(wsc(80), 0, gap));
+                    : mlp(wRowDay, 0, gap));
             setPx(wIcon[i], 26);
             wIcon[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : mlp(wsc(34), 0, gap));
+                    : mlp(wRowIcon, 0, gap));
             setPx(wTemp[i], 15);
             setPx(wSub[i], 10);
             tc.setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : new LinearLayout.LayoutParams(wsc(128), ViewGroup.LayoutParams.WRAP_CONTENT));
+                    : new LinearLayout.LayoutParams(wRowTemp, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -1248,8 +1269,11 @@ public class MainActivity extends Activity {
     private int weatherCardWidth() {
         int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
         if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + nd * 112);
-        return wsc(14 + 14 + 80 + 34 + 128) + 2 * wsc(prefs.getInt("w_gap", 6));
+        return wsc(14 + 14) + (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
+                + (wRowTemp > 0 ? wRowTemp : wsc(128)) + 2 * wsc(prefs.getInt("w_gap", 4));
     }
+
+    private int wRowDay, wRowIcon, wRowTemp;
 
     private LinearLayout.LayoutParams mlp(int w, int l, int r) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1544,30 +1568,56 @@ public class MainActivity extends Activity {
         });
     }
 
-    // ---- background pictures from the internet
+    // ---- background pictures / short videos from the internet
 
     private boolean bgBusy;
     private long bgRetryAt;
+
+    private boolean bgVideo() {
+        return prefs.getInt("bg_type", 0) == 1;
+    }
 
     private int bgSources() {
         return prefs.getInt("bg_src", 0);
     }
 
+    private int bgVSrc() {
+        return prefs.getInt("bg_vsrc", 0);
+    }
+
+    private boolean bgEnabled() {
+        return bgVideo() ? bgVSrc() != 0 : bgSources() != 0;
+    }
+
     private final Runnable bgTask = new Runnable() {
         @Override public void run() {
             handler.removeCallbacks(this);
-            handler.postDelayed(this, 60_000L);
-            if (bgSources() == 0 || bgBusy || !online() || System.currentTimeMillis() < bgRetryAt) return;
+            handler.postDelayed(this, 20_000L);
+            if (!bgEnabled() || bgBusy || !online() || System.currentTimeMillis() < bgRetryAt) return;
             if (bgDue()) bgFetch(false);
         }
     };
 
+    private static final int[] BG_UNIT_MIN = {1, 60, 1440};
+    private static final String[] BG_UNIT_NAMES = {"دقائق", "ساعات", "أيام"};
+
+    private int bgMinutes() {
+        if (!prefs.contains("bg_every")) return prefs.getInt("bg_min", 360);
+        return Math.max(1, prefs.getInt("bg_every", 6)) * BG_UNIT_MIN[Math.max(0, Math.min(2, prefs.getInt("bg_unit", 1)))];
+    }
+
+    private String bgEveryText() {
+        if (prefs.getInt("bg_mode", 0) == 1) return "يومياً الساعة " + prefs.getInt("bg_hour", 4) + ":00";
+        int unit = Math.max(0, Math.min(2, prefs.getInt("bg_unit", 1)));
+        if (!prefs.contains("bg_every")) return "كل " + (bgMinutes() / 60) + " ساعة";
+        return "كل " + prefs.getInt("bg_every", 6) + " " + BG_UNIT_NAMES[unit];
+    }
+
     private boolean bgDue() {
         long now = System.currentTimeMillis(), last = prefs.getLong("bg_last", 0);
-        if (!Backgrounds.file(this).exists() || last == 0) return true;
-        if (prefs.getInt("bg_mode", 0) == 0) {
-            return now - last >= prefs.getInt("bg_min", 360) * 60_000L;
-        }
+        boolean have = bgVideo() ? !prefs.getString("bg_vurl", "").isEmpty() : Backgrounds.file(this).exists();
+        if (!have || last == 0) return true;
+        if (prefs.getInt("bg_mode", 0) == 0) return now - last >= bgMinutes() * 60_000L;
         java.util.Calendar c = java.util.Calendar.getInstance();
         c.set(java.util.Calendar.HOUR_OF_DAY, Math.max(0, Math.min(23, prefs.getInt("bg_hour", 4))));
         c.set(java.util.Calendar.MINUTE, 0);
@@ -1575,96 +1625,168 @@ public class MainActivity extends Activity {
         return now >= c.getTimeInMillis() && last < c.getTimeInMillis();
     }
 
+    private void bgDone(boolean manual, boolean ok, String credit, String err) {
+        runOnUiThread(() -> {
+            bgBusy = false;
+            if (destroyed) return;
+            if (ok) {
+                prefs.edit().putLong("bg_last", System.currentTimeMillis())
+                        .putString("bg_credit", credit == null ? "" : credit).apply();
+                AppLog.info("BG", "new " + (bgVideo() ? "video" : "picture") + ": " + credit);
+                applyPageCss();
+                if (manual) toast("تم تغيير الخلفية ✓");
+            } else {
+                bgRetryAt = System.currentTimeMillis() + 2 * 60_000L;
+                AppLog.info("BG", "failed: " + err);
+                if (manual) toast("تعذّر التحميل: " + err);
+            }
+        });
+    }
+
     private void bgFetch(final boolean manual) {
         if (bgBusy) return;
         bgBusy = true;
-        if (manual) toast("جارٍ تحميل صورة جديدة…");
-        Backgrounds.fetch(this, bgSources(), prefs.getString("bg_links", ""), (ok, credit, err) ->
-                runOnUiThread(() -> {
-                    bgBusy = false;
-                    if (destroyed) return;
-                    if (ok) {
-                        prefs.edit().putLong("bg_last", System.currentTimeMillis())
-                                .putString("bg_credit", credit == null ? "" : credit).apply();
-                        AppLog.info("BG", "new picture: " + credit);
-                        applyPageCss();
-                        if (manual) toast("تم تغيير الخلفية ✓");
-                    } else {
-                        bgRetryAt = System.currentTimeMillis() + 10 * 60_000L;
-                        AppLog.info("BG", "failed: " + err);
-                        if (manual) toast("تعذّر تحميل الصورة: " + err);
-                    }
-                }));
+        if (manual) toast("جارٍ تحميل خلفية جديدة…");
+        if (bgVideo()) {
+            Backgrounds.fetchVideo(bgVSrc(), prefs.getString("bg_vlinks", ""), prefs.getString("bg_pexels", ""),
+                    prefs.getString("bg_topic", "nature landscape"), (ok, url, credit, err) -> {
+                        if (ok) prefs.edit().putString("bg_vurl", url).apply();
+                        bgDone(manual, ok, credit, err);
+                    });
+        } else {
+            Backgrounds.fetch(this, bgSources(), prefs.getString("bg_links", ""),
+                    (ok, credit, err) -> bgDone(manual, ok, credit, err));
+        }
     }
 
-    private static final int[] BG_MINS = {15, 60, 180, 360, 720, 1440, 4320};
-    private static final String[] BG_MIN_NAMES = {"كل 15 دقيقة", "كل ساعة", "كل 3 ساعات", "كل 6 ساعات",
-            "كل 12 ساعة", "كل يوم", "كل 3 أيام"};
+    private static final String[] TOPIC_NAMES = {"طبيعة ومناظر", "غيوم وسماء", "بحر وماء", "غابات وجبال",
+            "مدن ليلاً", "نجوم وفضاء", "صحراء", "شلالات وأنهار"};
+    private static final String[] TOPIC_Q = {"nature landscape", "clouds sky timelapse", "ocean sea waves",
+            "forest mountains", "city night", "stars night sky milky way", "desert dunes", "waterfall river"};
 
     private void showBgSettings() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
-        final int src = bgSources();
-        StringBuilder sn = new StringBuilder();
-        if ((src & Backgrounds.BING) != 0) sn.append("Bing ");
-        if ((src & Backgrounds.WIKI) != 0) sn.append("ويكيميديا ");
-        if ((src & Backgrounds.OWN) != 0) sn.append("روابطي ");
-        l.add("🌐  المصادر:  " + (src == 0 ? "متوقفة (خلفية Mawaqit الأصلية)" : sn.toString().trim()));
-        a.add(() -> {
-            final boolean[] on = {(src & 1) != 0, (src & 2) != 0, (src & 4) != 0};
-            dialog("مصادر الصور (اختر واحداً أو أكثر)")
-                    .setMultiChoiceItems(new String[]{"Bing — صورة اليوم (جودة عالية)",
-                            "Wikimedia Commons — صور مميزة", "روابطي الخاصة"}, on, null)
-                    .setPositiveButton("حفظ", (d, w) -> {
-                        int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 4 : 0);
-                        prefs.edit().putInt("bg_src", v).apply();
-                        if (v == 0) applyPageCss();
-                        else if (!Backgrounds.file(this).exists()) bgFetch(true);
-                        showBgSettings();
-                    })
-                    .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
-        });
-        final String links = prefs.getString("bg_links", "");
-        l.add("🔗  روابطي الخاصة:  " + Backgrounds.links(links).size() + " رابط");
-        a.add(() -> promptText("روابط صور مباشرة (https) — افصل بينها بمسافة", "https://…/image.jpg", links,
-                v -> {
-                    prefs.edit().putString("bg_links", v).apply();
-                    showBgSettings();
-                }));
-        final boolean daily = prefs.getInt("bg_mode", 0) == 1;
-        l.add("⏱  طريقة التغيير:  " + (daily ? "يومياً الساعة " + prefs.getInt("bg_hour", 4) + ":00"
-                : BG_MIN_NAMES[Math.max(0, java.util.Arrays.binarySearch(BG_MINS, prefs.getInt("bg_min", 360)))]));
-        a.add(() -> choice("متى تتغير الصورة؟", new String[]{"بعد مدة محددة", "يومياً في وقت محدد"},
-                prefs.getInt("bg_mode", 0), i -> {
-                    prefs.edit().putInt("bg_mode", i).apply();
-                    if (i == 0) {
-                        int cur = java.util.Arrays.binarySearch(BG_MINS, prefs.getInt("bg_min", 360));
-                        choice("المدة بين كل صورة وأخرى", BG_MIN_NAMES, Math.max(0, cur), j -> {
-                            prefs.edit().putInt("bg_min", BG_MINS[j]).apply();
+        final boolean vid = bgVideo();
+        l.add("🎞  نوع الخلفية:  " + (vid ? "فيديو قصير متحرك" : "صور ثابتة"));
+        a.add(() -> choice("نوع الخلفية", new String[]{"صور ثابتة (Bing / ويكيميديا / روابطي)",
+                "فيديو قصير متحرك (ويكيميديا / Pexels / روابطي)"}, vid ? 1 : 0, i -> {
+            prefs.edit().putInt("bg_type", i).apply();
+            applyPageCss();
+            showBgSettings();
+        }, this::showBgSettings));
+        if (!vid) {
+            final int src = bgSources();
+            StringBuilder sn = new StringBuilder();
+            if ((src & Backgrounds.BING) != 0) sn.append("Bing ");
+            if ((src & Backgrounds.WIKI) != 0) sn.append("ويكيميديا ");
+            if ((src & Backgrounds.OWN) != 0) sn.append("روابطي ");
+            l.add("🌐  المصادر:  " + (src == 0 ? "متوقفة (خلفية Mawaqit الأصلية)" : sn.toString().trim()));
+            a.add(() -> {
+                final boolean[] on = {(src & 1) != 0, (src & 2) != 0, (src & 4) != 0};
+                dialog("مصادر الصور (اختر واحداً أو أكثر)")
+                        .setMultiChoiceItems(new String[]{"Bing — صورة اليوم (جودة عالية)",
+                                "Wikimedia Commons — صور مميزة", "روابطي الخاصة"}, on, null)
+                        .setPositiveButton("حفظ", (d, w) -> {
+                            int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 4 : 0);
+                            prefs.edit().putInt("bg_src", v).apply();
+                            if (v == 0) applyPageCss();
+                            else if (!Backgrounds.file(this).exists()) bgFetch(true);
                             showBgSettings();
-                        }, this::showBgSettings);
-                    } else {
-                        numberDialog("ساعة التغيير اليومي (0–23)", "bg_hour", 4, 0, 23, "", null, null,
-                                this::showBgSettings, this::showBgSettings);
-                    }
-                }, this::showBgSettings));
-        l.add("🌑  تعتيم الصورة (لتبقى الأوقات واضحة):  " + prefs.getInt("bg_dim", 35) + "%");
-        a.add(() -> numberDialog("تعتيم الصورة", "bg_dim", 35, 0, 85, "%", null, this::applyPageCss,
+                        })
+                        .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
+            });
+            final String links = prefs.getString("bg_links", "");
+            l.add("🔗  روابطي الخاصة:  " + Backgrounds.links(links).size() + " رابط");
+            a.add(() -> promptText("روابط صور مباشرة (https) — افصل بينها بمسافة", "https://…/image.jpg", links,
+                    v -> {
+                        prefs.edit().putString("bg_links", v).apply();
+                        showBgSettings();
+                    }));
+        } else {
+            final int vs = bgVSrc();
+            StringBuilder sn = new StringBuilder();
+            if ((vs & Backgrounds.V_WIKI) != 0) sn.append("ويكيميديا ");
+            if ((vs & Backgrounds.V_PEXELS) != 0) sn.append("Pexels ");
+            if ((vs & Backgrounds.V_OWN) != 0) sn.append("روابطي ");
+            l.add("🌐  مصادر الفيديو:  " + (vs == 0 ? "متوقفة" : sn.toString().trim()));
+            a.add(() -> {
+                final boolean[] on = {(vs & 1) != 0, (vs & 2) != 0, (vs & 4) != 0};
+                dialog("مصادر الفيديو (اختر واحداً أو أكثر)")
+                        .setMultiChoiceItems(new String[]{"Wikimedia Commons — بلا مفتاح",
+                                "Pexels — مجاني (يحتاج مفتاح API مجاني)", "روابطي الخاصة (mp4 / webm)"}, on, null)
+                        .setPositiveButton("حفظ", (d, w) -> {
+                            int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 4 : 0);
+                            prefs.edit().putInt("bg_vsrc", v).apply();
+                            if (v == 0) applyPageCss();
+                            else if (prefs.getString("bg_vurl", "").isEmpty()) bgFetch(true);
+                            showBgSettings();
+                        })
+                        .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
+            });
+            final String key = prefs.getString("bg_pexels", "");
+            l.add("🔑  مفتاح Pexels:  " + (key.length() > 8 ? "محفوظ ✓" : "غير مُدخل (من pexels.com/api مجاناً)"));
+            a.add(() -> promptText("مفتاح Pexels API", "الصق المفتاح هنا", key, v -> {
+                prefs.edit().putString("bg_pexels", v).apply();
+                showBgSettings();
+            }));
+            final String vl = prefs.getString("bg_vlinks", "");
+            l.add("🔗  روابط فيديو خاصة:  " + Backgrounds.links(vl).size() + " رابط");
+            a.add(() -> promptText("روابط فيديو مباشرة (https) — افصل بينها بمسافة", "https://…/clip.mp4", vl,
+                    v -> {
+                        prefs.edit().putString("bg_vlinks", v).apply();
+                        showBgSettings();
+                    }));
+            String tq = prefs.getString("bg_topic", "nature landscape");
+            int ti = Math.max(0, Arrays.asList(TOPIC_Q).indexOf(tq));
+            l.add("🎬  موضوع الفيديو:  " + TOPIC_NAMES[ti]);
+            a.add(() -> choice("موضوع الفيديو", TOPIC_NAMES, ti, i -> {
+                prefs.edit().putString("bg_topic", TOPIC_Q[i]).apply();
+                showBgSettings();
+            }, this::showBgSettings));
+        }
+        final boolean daily = prefs.getInt("bg_mode", 0) == 1;
+        l.add("⏱  طريقة التغيير:  " + bgEveryText());
+        a.add(() -> choice("متى تتغير الخلفية؟", new String[]{"كل مدة محددة (دقائق / ساعات / أيام)",
+                "يومياً في ساعة محددة"}, daily ? 1 : 0, i -> {
+            prefs.edit().putInt("bg_mode", i).apply();
+            if (i == 0) {
+                choice("وحدة المدة", BG_UNIT_NAMES, prefs.getInt("bg_unit", 1), u -> {
+                    prefs.edit().putInt("bg_unit", u).apply();
+                    numberDialog("عدد " + BG_UNIT_NAMES[u] + " بين كل تغيير وآخر", "bg_every",
+                            u == 0 ? 10 : u == 1 ? 6 : 1, 1, u == 0 ? 120 : u == 1 ? 72 : 30, "", null,
+                            this::showBgSettings, this::showBgSettings);
+                }, this::showBgSettings);
+            } else {
+                numberDialog("ساعة التغيير اليومي (0–23)", "bg_hour", 4, 0, 23, "", null, null,
+                        this::showBgSettings, this::showBgSettings);
+            }
+        }, this::showBgSettings));
+        l.add("🌑  تعتيم الخلفية (لتبقى الأوقات واضحة):  " + prefs.getInt("bg_dim", 35) + "%");
+        a.add(() -> numberDialog("تعتيم الخلفية", "bg_dim", 35, 0, 85, "%", null, this::applyPageCss,
                 this::showBgSettings, this::showBgSettings));
-        l.add("🔄  تغيير الصورة الآن");
+        l.add("🔄  تغيير الخلفية الآن");
         a.add(() -> {
-            if (bgSources() == 0) toast("اختر مصدراً أولاً");
+            if (!bgEnabled()) toast("اختر مصدراً أولاً");
             else bgFetch(true);
             showBgSettings();
         });
         String cr = prefs.getString("bg_credit", "");
         l.add("©  المصدر الحالي:  " + (cr.isEmpty() ? "—" : cr));
         a.add(this::showBgSettings);
-        menu("صور الخلفية من الإنترنت", l, a, this::showLauncherSettings);
+        menu("الخلفية من الإنترنت (صور / فيديو)", l, a, this::showLauncherSettings);
     }
 
     private void showAdminDialog() {
         final boolean on = adminActive();
+        Intent probe = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+        if (!on && probe.resolveActivity(getPackageManager()) == null) {
+            dialog("«مدير الجهاز» غير متاح").setMessage("نظام هذا الجهاز (Fire OS) يحجب شاشة تفعيل «مدير الجهاز» "
+                    + "بالكامل، فلا يمكن استعمالها للنوم هنا. تبقى الشاشة السوداء مع التعتيم الكامل، "
+                    + "ويعمل النوم الحقيقي فقط عند توفر ADB الذاتي.")
+                    .setPositiveButton("حسناً", null).show();
+            return;
+        }
         dialog("صلاحية «مدير الجهاز» (نوم الجهاز)")
                 .setMessage("تسمح للانشر بقفل الجهاز/إطفاء الشاشة بعد التعتيم الكامل بدون ADB. "
                         + "الحالة الحالية: " + (on ? "مفعّلة ✓" : "غير مفعّلة")
@@ -2208,8 +2330,7 @@ public class MainActivity extends Activity {
         layoutWeather();
 
         FrameLayout.LayoutParams wl = (FrameLayout.LayoutParams) webView.getLayoutParams();
-        root.setBackground(fillMode ? new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF05100C, 0xFF0B2A20}) : new ColorDrawable(Color.BLACK));
+        applyRootBg();
         if (fillMode) {
             wl.height = prefs.getBoolean("strip_over", false) ? ViewGroup.LayoutParams.MATCH_PARENT : topH;
             webView.setScaleX(1f);
@@ -3281,7 +3402,7 @@ public class MainActivity extends Activity {
         });
         l.add("🔒  مدير الجهاز (نوم الجهاز):  " + (adminActive() ? "مفعّل" : "غير مفعّل"));
         a.add(this::showAdminDialog);
-        l.add("🖼  صور الخلفية من الإنترنت:  " + (bgSources() == 0 ? "متوقفة" : "تعمل"));
+        l.add("🖼  صور الخلفية من الإنترنت:  " + (bgEnabled() ? "تعمل" : "متوقفة"));
         a.add(this::showBgSettings);
         l.add("🔌  اتصال ADB الذاتي");
         a.add(this::showAdbDialog);
@@ -3815,8 +3936,11 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
-        l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 6));
-        a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 6, 0, 30, "", null,
+        l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 4) + "  (0 = ملتصقة)");
+        a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 4, 0, 30, "", null,
+                this::layoutWeather, back, back));
+        l.add("🔠  حجم الخط داخل البطاقة:  " + prefs.getInt("w_font", 100) + "%");
+        a.add(() -> numberDialog("حجم الخط داخل البطاقة (تصغير/تكبير)", "w_font", 100, 50, 250, "%", null,
                 this::layoutWeather, back, back));
         l.add("📆  عدد الأيام:  " + prefs.getInt("w_days", 3));
         a.add(() -> numberDialog("عدد الأيام المعروضة", "w_days", 3, 1, 3, "", null, this::layoutWeather,
@@ -4058,6 +4182,10 @@ public class MainActivity extends Activity {
         final List<Runnable> a = new ArrayList<>();
         l.add("📧  إرسال التقرير بالبريد (السجل + بنية الصفحة)");
         a.add(() -> emailReport(true));
+        l.add("📋  نسخ التقرير كاملاً (سجل + بنية الصفحة)");
+        a.add(() -> copyReport(true));
+        l.add("📋  نسخ بنية الصفحة فقط");
+        a.add(() -> copyReport(false));
         l.add("📧  إرسال السجل فقط بالبريد");
         a.add(() -> emailReport(false));
         l.add("👁  عرض آخر الأحداث");
@@ -4090,6 +4218,29 @@ public class MainActivity extends Activity {
             }
             domDump = r;
             sendMail(reportText(true));
+        });
+    }
+
+    /** Copies the report (or only the page structure) to the clipboard. */
+    private void copyReport(final boolean full) {
+        toast("جارٍ فحص الصفحة…");
+        webView.evaluateJavascript(JS_DOM, v -> {
+            String r = v == null ? "" : v;
+            try {
+                r = new JSONArray("[" + r + "]").getString(0);
+            } catch (Exception ignored) {
+            }
+            domDump = r;
+            String text = full ? reportText(true) : r;
+            try {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Mawaqit Home", text));
+                toast("تم النسخ ✓ (" + text.length() / 1000 + " ألف حرف)");
+            } catch (Exception e) {
+                AppLog.error("COPY", "clipboard failed", e);
+                toast("تعذّر النسخ");
+            }
         });
     }
 
@@ -4156,15 +4307,28 @@ public class MainActivity extends Activity {
                     .append("vh) scale(").append(z / 100f).append(")!important;");
             css.append("}");
         }
-        css.append(".currentTime[data-mh]>div:not(#mh-ck){display:none!important}");
-        if (bgSources() != 0 && Backgrounds.file(this).exists()) {
+        if (pf > 0) css.append(".currentTime>div:not(#mh-ck){display:none!important}");
+        if (!bgVideo() && bgSources() != 0 && Backgrounds.file(this).exists()) {
             float dm = Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f;
             css.append("body{background-image:linear-gradient(0deg,rgba(0,0,0,").append(dm).append("),rgba(0,0,0,")
                     .append(dm).append(")),url('/__mhbg/bg.jpg?v=").append(prefs.getLong("bg_last", 0))
                     .append("')!important;background-size:cover!important;background-position:center!important;")
                     .append("background-repeat:no-repeat!important}");
         }
-        String js = "(function(){window.__mhcss=" + JSONObject.quote(css.toString()) + ";window.__mhfont="
+        final boolean vidOn = bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty();
+        if (vidOn) css.append("html,body{background:#000!important}");
+        String js = "(function(){window.__mhvid=" + JSONObject.quote(vidOn ? prefs.getString("bg_vurl", "") : "")
+                + ";window.__mhdim=" + (Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f)
+                + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid'),d=document.getElementById('mh-dim');"
+                + "if(!u){if(v)v.remove();if(d)d.remove();return;}"
+                + "if(!v){v=document.createElement('video');v.id='mh-vid';v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;"
+                + "v.setAttribute('playsinline','');v.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;object-fit:cover;z-index:-2;background:#000';"
+                + "document.body.appendChild(v);}"
+                + "if(!d){d=document.createElement('div');d.id='mh-dim';d.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-1;pointer-events:none';document.body.appendChild(d);}"
+                + "d.style.background='rgba(0,0,0,'+window.__mhdim+')';"
+                + "if(v.getAttribute('data-u')!==u){v.setAttribute('data-u',u);v.src=u;try{v.play();}catch(e){}}"
+                + "else if(v.paused){try{v.play();}catch(e){}}}"
+                + "window.__mhcss=" + JSONObject.quote(css.toString()) + ";window.__mhfont="
                 + (pf > 0) + ";"
                 + "function gw(cs,ch){var t=document.createElement('span');"
                 + "t.style.cssText='position:absolute;visibility:hidden;white-space:pre;font-family:'+cs.fontFamily"
@@ -4188,15 +4352,17 @@ public class MainActivity extends Activity {
                 + "if(!o){o=document.createElement('div');o.id='mh-ck';"
                 + "o.style.cssText='display:inline-flex;align-items:baseline;white-space:nowrap';"
                 + "o.appendChild(document.createElement('span'));o.appendChild(document.createElement('span'));ct.appendChild(o);}"
-                + "o.style.direction=getComputedStyle(ct).direction;"
-                + "cp(o.children[0],ca);cp(o.children[1],cb);"
+                + "if(o.__k!==k){o.style.direction=getComputedStyle(ct).direction;cp(o.children[0],ca);cp(o.children[1],cb);o.__k=k;}"
                 + "fill(o.children[0],a.textContent,window.__mhwa);fill(o.children[1],b.textContent,window.__mhwb);"
                 + "ct.setAttribute('data-mh','1');}"
                 + "function ap(){var s=document.getElementById('mh-style');"
                 + "if(!s){s=document.createElement('style');s.id='mh-style';(document.head||document.body).appendChild(s);}"
-                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();}"
+                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();vid();}"
                 + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);"
-                + "if(!window.__mhiv2)window.__mhiv2=setInterval(fix,250);})()";
+                + "if(!window.__mhiv2)window.__mhiv2=setInterval(fix,500);"
+                + "if(!window.__mhmo&&window.MutationObserver){window.__mhmo=new MutationObserver(function(){"
+                + "if(window.__mhbusy)return;window.__mhbusy=1;try{fix();}catch(x){}window.__mhmo.takeRecords();window.__mhbusy=0;});"
+                + "window.__mhmo.observe(document.body,{childList:true,subtree:true,characterData:true});}})()";
         webView.evaluateJavascript(js, null);
     }
 
@@ -4650,6 +4816,7 @@ public class MainActivity extends Activity {
         DecelerateInterpolator ip = new DecelerateInterpolator(1.6f);
 
         if (!ui && railOpen) closeRail(false);
+        if (ui) applyRootBg(); else root.setBackgroundColor(Color.BLACK);   // no green edges while pixel-shifting
 
         strip.animate().translationY(ui ? 0f : stripH + dp(6)).setDuration(dur)
                 .setInterpolator(ip).start();
@@ -4666,6 +4833,12 @@ public class MainActivity extends Activity {
         overlay.animate().alpha(dark).setDuration(animate ? (s >= 2 ? 4000L : ms(500L)) : 0L).start();
         AppLog.info("SAVER", "stage " + s);
         if (ui) maybeShowNotice();
+    }
+
+    private void applyRootBg() {
+        if (root == null) return;
+        root.setBackground(fillMode && stage == 0 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF05100C, 0xFF0B2A20}) : new ColorDrawable(Color.BLACK));
     }
 
     private void resizeWebFill(final boolean full, boolean animate) {
