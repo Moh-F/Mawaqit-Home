@@ -1754,7 +1754,7 @@ public class MainActivity extends Activity {
                 choice("وحدة المدة", BG_UNIT_NAMES, prefs.getInt("bg_unit", 1), u -> {
                     prefs.edit().putInt("bg_unit", u).apply();
                     numberDialog("عدد " + BG_UNIT_NAMES[u] + " بين كل تغيير وآخر", "bg_every",
-                            u == 0 ? 10 : u == 1 ? 6 : 1, 1, u == 0 ? 120 : u == 1 ? 72 : 30, "", null,
+                            u == 0 ? 10 : u == 1 ? 6 : 1, 1, u == 0 ? 120 : u == 1 ? 72 : 30, "", null, null,
                             this::showBgSettings, this::showBgSettings);
                 }, this::showBgSettings);
             } else {
