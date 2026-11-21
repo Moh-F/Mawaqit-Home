@@ -5,18 +5,15 @@ import android.os.Handler;
 import android.os.Looper;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import dadb.AdbKeyPair;
-import dadb.AdbShellResponse;
-import dadb.Dadb;
-
 /**
- * Lets the launcher talk to the device's OWN adb daemon (127.0.0.1:5555), so it can run
- * a few shell commands that a normal app is not allowed to (open hidden settings screens,
- * put the device to sleep). Needs "ADB debugging" on; the first connection shows an
- * "Allow USB debugging?" prompt on the TV, answer "Always allow".
+ * Lets the launcher talk to the device's OWN adb daemon (port 5555) so it can run shell commands
+ * a normal app is not allowed to (install updates silently, put the device to sleep).
+ * Needs "ADB debugging" on; the first connection shows an "Allow USB debugging?" prompt.
  */
 public final class AdbShell {
 
@@ -25,17 +22,12 @@ public final class AdbShell {
     }
 
     private static final ExecutorService EXEC = Executors.newSingleThreadExecutor();
-    private static Dadb dadb;
+    private static MiniAdb conn;
 
     private AdbShell() {}
 
-    private static synchronized Dadb connect(Context c) throws Exception {
-        if (dadb != null) return dadb;
-        File priv = new File(c.getFilesDir(), "adbkey");
-        File pub = new File(c.getFilesDir(), "adbkey.pub");
-        if (!priv.exists() || !pub.exists()) AdbKeyPair.generate(priv, pub);
-        AdbKeyPair pair = AdbKeyPair.read(priv, pub);
-        java.util.List<String> hosts = new java.util.ArrayList<>();
+    private static List<String> hosts() {
+        List<String> hosts = new ArrayList<>();
         hosts.add("127.0.0.1");
         try {
             java.util.Enumeration<java.net.NetworkInterface> nis =
@@ -51,23 +43,25 @@ public final class AdbShell {
             }
         } catch (Exception ignored) {
         }
+        return hosts;
+    }
+
+    private static synchronized MiniAdb connect(Context c) throws Exception {
+        if (conn != null) return conn;
+        MiniAdb.Keys keys = MiniAdb.loadKeys(c.getFilesDir());
         Throwable last = null;
-        // EOF usually means the "Allow USB debugging?" prompt was just answered (adbd drops the
-        // first connection), so try a few rounds before giving up.
-        for (int round = 1; round <= 3; round++) {
-            for (String h : hosts) {
+        for (int round = 1; round <= 2; round++) {
+            for (String h : hosts()) {
                 try {
-                    Dadb d = Dadb.create(h, 5555, pair);
-                    d.shell("echo ok");           // forces the connection / auth now
-                    dadb = d;
+                    conn = MiniAdb.connect(h, 5555, keys);
                     AppLog.info("ADB", "connected via " + h + " (round " + round + ")");
-                    return d;
+                    return conn;
                 } catch (Throwable t) {
                     last = t;
                     AppLog.info("ADB", "round " + round + " " + h + " failed: " + t);
                 }
             }
-            if (round < 3) {
+            if (round < 2) {
                 try { Thread.sleep(2500); } catch (InterruptedException ignored) { }
             }
         }
@@ -77,17 +71,15 @@ public final class AdbShell {
     /** Deletes this app's ADB key so the next connection asks for authorisation again. */
     public static synchronized void resetKey(Context c) {
         reset();
+        MiniAdb.deleteKeys(c.getFilesDir());
         new File(c.getFilesDir(), "adbkey").delete();
         new File(c.getFilesDir(), "adbkey.pub").delete();
         AppLog.info("ADB", "key reset");
     }
 
     private static synchronized void reset() {
-        try {
-            if (dadb != null) dadb.close();
-        } catch (Exception ignored) {
-        }
-        dadb = null;
+        if (conn != null) conn.close();
+        conn = null;
     }
 
     /** Runs a shell command in the background; the callback is called on the main thread. */
@@ -100,9 +92,9 @@ public final class AdbShell {
                 boolean connFail = false;
                 String out;
                 try {
-                    AdbShellResponse r = connect(app).shell(cmd);
-                    ok = r.getExitCode() == 0;
-                    out = r.getAllOutput().trim();
+                    Object[] r = connect(app).shell(cmd);
+                    ok = ((Integer) r[0]) == 0;
+                    out = (String) r[1];
                 } catch (Throwable t) {
                     reset();
                     connFail = true;

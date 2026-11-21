@@ -58,6 +58,5 @@ android {
 
 dependencies {
     // Talks to the device's own adb daemon (open hidden settings screens, sleep the device)
-    implementation("dev.mobile:dadb:1.2.10")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

@@ -271,7 +271,18 @@ public class MainActivity extends Activity {
     private final List<View> tiles = new ArrayList<>();
 
     // floating category menu
-    private ScrollView railScroll;
+    private class CapScroll extends ScrollView {
+        int maxH = 0;
+
+        CapScroll(Context c) { super(c); }
+
+        @Override protected void onMeasure(int w, int h) {
+            if (maxH > 0) h = MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST);
+            super.onMeasure(w, h);
+        }
+    }
+
+    private CapScroll railScroll;
     private LinearLayout railList;
     private final List<TextView> railItems = new ArrayList<>();
     private boolean railOpen = false;
@@ -776,6 +787,27 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String target) {
                 return false;
+            }
+
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,
+                                                                              android.webkit.WebResourceRequest r) {
+                String p = r.getUrl().getPath();
+                if (p != null && p.startsWith("/__mhfont/") && p.endsWith(".ttf")) {
+                    try {
+                        String name = p.substring("/__mhfont/".length());
+                        if (name.contains("/") || name.contains("..")) return null;
+                        android.webkit.WebResourceResponse resp = new android.webkit.WebResourceResponse(
+                                "font/ttf", null, getAssets().open("fonts/" + name));
+                        java.util.Map<String, String> hd = new HashMap<>();
+                        hd.put("Access-Control-Allow-Origin", "*");
+                        resp.setResponseHeaders(hd);
+                        return resp;
+                    } catch (Exception e) {
+                        AppLog.info("FONT", "page font not found: " + p);
+                    }
+                }
+                return null;
             }
 
             @Override
@@ -1833,7 +1865,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------ Floating category menu
 
     private void buildRail() {
-        railScroll = new ScrollView(this);
+        railScroll = new CapScroll(this);
         railScroll.setVerticalScrollBarEnabled(false);
         railScroll.setFocusable(false);
         railScroll.setClipChildren(false);
@@ -1854,7 +1886,7 @@ public class MainActivity extends Activity {
         railScroll.setVisibility(View.INVISIBLE);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(260),
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                (railRight ? Gravity.RIGHT : Gravity.LEFT) | Gravity.CENTER_VERTICAL);
+                (railRight ? Gravity.RIGHT : Gravity.LEFT) | Gravity.TOP);
         lp.setMargins(dp(16), dp(16), dp(16), dp(120));
         shiftLayer.addView(railScroll, lp);
     }
@@ -1979,7 +2011,9 @@ public class MainActivity extends Activity {
         railW = Math.max(dp(220), Math.min(dp(330), Math.round(w * 0.2f)));
         FrameLayout.LayoutParams rl = (FrameLayout.LayoutParams) railScroll.getLayoutParams();
         rl.width = railW;
+        rl.gravity = (railRight ? Gravity.RIGHT : Gravity.LEFT) | Gravity.TOP;
         rl.setMargins(dp(16), dp(16), dp(16), stripH + dp(14));
+        railScroll.maxH = Math.max(dp(160), h - stripH - dp(34));
         railScroll.setLayoutParams(rl);
         railScroll.setTranslationX(railOpen ? 0f : railHidden());
 
@@ -2955,7 +2989,7 @@ public class MainActivity extends Activity {
         a.add(this::showStripSettings);
         l.add("🌦  بطاقة الطقس");
         a.add(this::showWeatherSettings);
-        l.add("🧩  تحريك عناصر صفحة المواقيت");
+        l.add("🎯  تحريك عناصر صفحة المواقيت");
         a.add(this::showPageElements);
         l.add("🕒  الوقت والتاريخ والمنطقة الزمنية");
         a.add(this::showTimeSettings);
@@ -3135,16 +3169,43 @@ public class MainActivity extends Activity {
         showTimeSettings();
     }
 
+    private void aboutRow(LinearLayout box, String title, String value, boolean ltr) {
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(13));
+        t.setTextColor(acc());
+        t.setTypeface(tf(true));
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0, dp(12), 0, dp(2));
+        box.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView v = new TextView(this);
+        v.setText(value);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(ltr ? 13 : 16));
+        v.setTextColor(Color.WHITE);
+        v.setTextDirection(ltr ? View.TEXT_DIRECTION_LTR : View.TEXT_DIRECTION_RTL);
+        v.setGravity(Gravity.CENTER);
+        v.setLineSpacing(0f, 1.1f);
+        box.addView(v, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
     private void showAbout() {
-        showInfo("Mawaqit Home",
-                "الإصدار: " + Updater.currentName(this) + "  (build " + Updater.currentCode(this) + ")\n"
-                        + "© Moh-F — جميع الحقوق محفوظة\n\n"
-                        + "بيانات الطقس: Open-Meteo.com (CC BY 4.0)\n"
-                        + "أوقات الصلاة: Mawaqit / Aladhan\n"
-                        + "اتصال ADB: مكتبة dadb (Apache-2.0)",
-                "الصفحة:\n" + url + "\n\nالسجل:\n"
-                        + (AppLog.file() != null ? AppLog.file().getAbsolutePath() : "—"),
-                "حسناً", null, null, null, null, null);
+        ScrollView sv = new ScrollView(this);
+        sv.setFocusable(true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.setPadding(dp(16), dp(4), dp(16), dp(8));
+        aboutRow(box, "الإصدار", Updater.currentName(this) + "   (build " + Updater.currentCode(this) + ")", false);
+        aboutRow(box, "حقوق النشر", "© Moh-F — جميع الحقوق محفوظة", false);
+        aboutRow(box, "بيانات الطقس", "Open-Meteo.com (CC BY 4.0)", false);
+        aboutRow(box, "أوقات الصلاة", "Mawaqit / Aladhan", false);
+        aboutRow(box, "الخطوط", "Tajawal · Almarai · Amiri · Scheherazade · Lalezar (OFL)", false);
+        aboutRow(box, "الصفحة", url, true);
+        aboutRow(box, "ملف السجل", AppLog.file() != null ? AppLog.file().getAbsolutePath() : "—", true);
+        sv.addView(box);
+        dialog("Mawaqit Home").setView(sv).setPositiveButton("حسناً", null).show();
     }
 
     private void promptText(String title, String hint, String initial, final TextCb onOk) {
@@ -3230,7 +3291,7 @@ public class MainActivity extends Activity {
         l.add("📐  ارتفاع منطقة الصفحة (يحدد ارتفاع الشريط):  " + prefs.getInt("top_pct", 82) + "%");
         a.add(() -> numberDialog("ارتفاع منطقة الصفحة = 100% − ارتفاع الشريط (قلّله مع صفين أو ثلاثة)",
                 "top_pct", 82, 55, 95, "%", null, null, this::recreate, this::showStripSettings));
-        l.add("🪟  موضع الشريط:  " + (prefs.getBoolean("strip_over", false) ? "فوق صفحة المواقيت (يغطي أسفلها)"
+        l.add("▦  موضع الشريط:  " + (prefs.getBoolean("strip_over", false) ? "فوق صفحة المواقيت (يغطي أسفلها)"
                 : "تحت الصفحة (منفصل)"));
         a.add(() -> choice("موضع الشريط", new String[]{"تحت الصفحة (الصفحة تنتهي فوقه)",
                 "فوق الصفحة (الصفحة بكامل الشاشة والشريط يغطي أسفلها)"},
@@ -3459,7 +3520,7 @@ public class MainActivity extends Activity {
         l.add("🔆  شفافية البطاقة:  " + prefs.getInt("w_alpha", 55) + "%  (0 = شفافة تماماً)");
         a.add(() -> numberDialog("شفافية البطاقة (0% = تذوب في الصفحة)", "w_alpha", 55, 0, 100, "%", null,
                 this::applyWeatherStyle, back, back));
-        l.add("🧱  شكل العرض:  " + (prefs.getInt("w_layout", 0) == 1 ? "أعمدة (أفقي)" : "صفوف (عمودي)"));
+        l.add("▤  شكل العرض:  " + (prefs.getInt("w_layout", 0) == 1 ? "أعمدة (أفقي)" : "صفوف (عمودي)"));
         a.add(() -> choice("شكل عرض الأيام", new String[]{"صفوف: كل يوم في سطر", "أعمدة: الأيام الثلاثة جنب بعض"},
                 prefs.getInt("w_layout", 0), i -> {
                     prefs.edit().putInt("w_layout", i).apply();
@@ -3701,6 +3762,14 @@ public class MainActivity extends Activity {
 
     private void applyPageCss() {
         StringBuilder css = new StringBuilder();
+        int pf = prefs.getInt("page_font", 0);
+        if (pf > 0 && pf < FONT_FILES.length) {
+            css.append("@font-face{font-family:'MHF';font-weight:400;src:url('/__mhfont/")
+                    .append(FONT_FILES[pf][0]).append(".ttf')}")
+                    .append("@font-face{font-family:'MHF';font-weight:700;src:url('/__mhfont/")
+                    .append(FONT_FILES[pf][1]).append(".ttf')}")
+                    .append("html,body,body *{font-family:'MHF',sans-serif!important}");
+        }
         for (String[] e : PG) {
             String k = e[0];
             int x = prefs.getInt("pg_" + k + "_x", 0), y = prefs.getInt("pg_" + k + "_y", 0),
@@ -3724,6 +3793,14 @@ public class MainActivity extends Activity {
     private void showPageElements() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
+        final String[] pfn = FONT_NAMES.clone();
+        pfn[0] = "خط الصفحة الأصلي";
+        l.add("🔤  خط صفحة المواقيت:  " + pfn[Math.max(0, Math.min(pfn.length - 1, prefs.getInt("page_font", 0)))]);
+        a.add(() -> choice("خط صفحة المواقيت", pfn, prefs.getInt("page_font", 0), i -> {
+            prefs.edit().putInt("page_font", i).apply();
+            applyPageCss();
+            showPageElements();
+        }, this::showPageElements));
         for (final String[] e : PG) {
             l.add(e[1] + ":  " + pgSummary(e[0]));
             a.add(() -> showPageElement(e));
@@ -3735,7 +3812,7 @@ public class MainActivity extends Activity {
                 ed.remove("pg_" + e[0] + "_x").remove("pg_" + e[0] + "_y")
                         .remove("pg_" + e[0] + "_s").remove("pg_" + e[0] + "_h");
             }
-            ed.apply();
+            ed.remove("page_font").apply();
             applyPageCss();
             showPageElements();
         });
