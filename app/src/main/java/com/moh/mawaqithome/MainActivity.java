@@ -54,6 +54,7 @@ import android.text.style.ForegroundColorSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
@@ -460,6 +461,7 @@ public class MainActivity extends Activity {
 
     private final Runnable idleTask = new Runnable() {
         @Override public void run() {
+            if (openDialogs > 0) lastInput = SystemClock.elapsedRealtime();   // a menu is in use
             long idleMs = SystemClock.elapsedRealtime() - lastInput;
             int t1 = stageMinutes(0), t2 = stageMinutes(1), t3 = stageMinutes(2), t4 = stageMinutes(3);
             int target = 0;
@@ -1908,7 +1910,6 @@ public class MainActivity extends Activity {
             t.setTextDirection(View.TEXT_DIRECTION_RTL);
             t.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
             t.setPadding(dp(14), 0, dp(14), 0);
-            t.setEllipsize(TextUtils.TruncateAt.END);
             t.setFocusable(true);
             t.setClickable(true);
             t.setBackground(focusBackground());
@@ -1928,6 +1929,25 @@ public class MainActivity extends Activity {
             railList.addView(t, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
         }
+        railW = computeRailW();
+        FrameLayout.LayoutParams rlp = (FrameLayout.LayoutParams) railScroll.getLayoutParams();
+        if (rlp != null && rlp.width != railW) {
+            rlp.width = railW;
+            railScroll.setLayoutParams(rlp);
+            railScroll.setTranslationX(railOpen ? 0f : railHidden());
+        }
+    }
+
+    /** Width that fits the longest category name, so nothing is cut off. */
+    private int computeRailW() {
+        int sw = sizeW > 0 ? sizeW : getResources().getDisplayMetrics().widthPixels;
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setTypeface(tf(true));
+        p.setTextSize(fs(19));
+        float mx = p.measureText("🕌  Mawaqit Home");
+        for (Tab tb : tabs) mx = Math.max(mx, p.measureText(tb.icon + "   " + tb.name));
+        int need = Math.round(mx) + dp(14 * 2 + 14 * 2 + 12);
+        return Math.max(dp(200), Math.min(Math.round(sw * 0.5f), need));
     }
 
     private float railHidden() {
@@ -2008,7 +2028,7 @@ public class MainActivity extends Activity {
         nameLabel.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, labelH));
 
-        railW = Math.max(dp(220), Math.min(dp(330), Math.round(w * 0.2f)));
+        railW = computeRailW();
         FrameLayout.LayoutParams rl = (FrameLayout.LayoutParams) railScroll.getLayoutParams();
         rl.width = railW;
         rl.gravity = (railRight ? Gravity.RIGHT : Gravity.LEFT) | Gravity.TOP;
@@ -2364,7 +2384,30 @@ public class MainActivity extends Activity {
         }
 
         ListView getListView() { return listView; }
+
+        @Override public boolean dispatchKeyEvent(KeyEvent e) {
+            lastInput = SystemClock.elapsedRealtime();
+            return super.dispatchKeyEvent(e);
+        }
+
+        @Override public boolean dispatchTouchEvent(MotionEvent e) {
+            lastInput = SystemClock.elapsedRealtime();
+            return super.dispatchTouchEvent(e);
+        }
+
+        @Override protected void onStart() {
+            super.onStart();
+            openDialogs++;
+        }
+
+        @Override protected void onStop() {
+            super.onStop();
+            openDialogs = Math.max(0, openDialogs - 1);
+            lastInput = SystemClock.elapsedRealtime();
+        }
     }
+
+    private int openDialogs = 0;
 
     /** Caps its height so long lists/messages scroll instead of leaving the screen. */
     private class CapFrame extends FrameLayout {
@@ -2393,7 +2436,11 @@ public class MainActivity extends Activity {
         DialogInterface.OnMultiChoiceClickListener multiL;
         String[] multiNames;
 
+        boolean centerTitle;
+
         DlgBuilder(String t) { title = t; }
+
+        DlgBuilder centered() { centerTitle = true; return this; }
 
         DlgBuilder setMessage(CharSequence m) { msg = m; return this; }
 
@@ -2463,7 +2510,7 @@ public class MainActivity extends Activity {
             tt.setTypeface(tf(true));
             tt.setTextColor(acc());
             tt.setTextDirection(View.TEXT_DIRECTION_RTL);
-            tt.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+            tt.setGravity((centerTitle ? Gravity.CENTER_HORIZONTAL : Gravity.RIGHT) | Gravity.CENTER_VERTICAL);
             tt.setPadding(dp(16), dp(14), dp(16), dp(10));
             root.addView(tt, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -2588,7 +2635,24 @@ public class MainActivity extends Activity {
             root.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            int width = Math.min(dm.widthPixels - dp(40), Math.max(dp(380), Math.round(dm.widthPixels * 0.40f)));
+            int maxW = Math.min(dm.widthPixels - dp(40), Math.round(dm.widthPixels * 0.80f));
+            int width = Math.min(maxW, Math.max(dp(380), Math.round(dm.widthPixels * 0.40f)));
+            android.graphics.Paint mp = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            mp.setTypeface(tf(true));
+            mp.setTextSize(fs(21));
+            int need = Math.round(mp.measureText(title)) + dp(60);
+            if (adapter instanceof MenuAdapter) {
+                mp.setTextSize(fs(17));
+                for (String lb : ((MenuAdapter) adapter).labels) {
+                    need = Math.max(need, Math.round(mp.measureText(lb)) + dp(18 * 2 + 8 * 2 + 20 + 12));
+                }
+            } else if (multi) {
+                mp.setTextSize(fs(17));
+                for (String lb : multiNames) {
+                    need = Math.max(need, Math.round(mp.measureText(lb)) + dp(100));
+                }
+            }
+            width = Math.min(maxW, Math.max(width, need));
             d.setContentView(root, new ViewGroup.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT));
             final Window w = d.getWindow();
             if (w != null) {
@@ -3205,7 +3269,7 @@ public class MainActivity extends Activity {
         aboutRow(box, "الصفحة", url, true);
         aboutRow(box, "ملف السجل", AppLog.file() != null ? AppLog.file().getAbsolutePath() : "—", true);
         sv.addView(box);
-        dialog("Mawaqit Home").setView(sv).setPositiveButton("حسناً", null).show();
+        dialog("Mawaqit Home").centered().setView(sv).setPositiveButton("حسناً", null).show();
     }
 
     private void promptText(String title, String hint, String initial, final TextCb onOk) {
@@ -3712,8 +3776,10 @@ public class MainActivity extends Activity {
                     AdbShell.run(MainActivity.this, "echo connected", new AdbShell.Callback() {
                         @Override public void done(boolean ok, String output) {
                             dialog(ok ? "✓ الاتصال يعمل" : "✗ فشل الاتصال")
-                                    .setMessage(ok ? output : output
-                                            + "\n\nتأكد من تفعيل ADB debugging ثم أعد المحاولة.")
+                                    .setMessage(ok ? output : output + (AdbShell.blocked(MainActivity.this)
+                                            ? "\n\nجهازك يُغلق اتصال ADB الذاتي فور فتحه (غالباً حجب من نظام Fire OS). "
+                                            + "هذا لا يمنع التحديثات: تُثبَّت عبر مثبّت أندرويد."
+                                            : "\n\nتأكد من تفعيل ADB debugging ثم أعد المحاولة."))
                                     .setPositiveButton("حسناً", null).show();
                         }
                     });
@@ -3762,7 +3828,7 @@ public class MainActivity extends Activity {
 
     private void applyPageCss() {
         StringBuilder css = new StringBuilder();
-        int pf = prefs.getInt("page_font", 0);
+        int pf = prefs.getInt("font", 0);
         if (pf > 0 && pf < FONT_FILES.length) {
             css.append("@font-face{font-family:'MHF';font-weight:400;src:url('/__mhfont/")
                     .append(FONT_FILES[pf][0]).append(".ttf')}")
@@ -3782,10 +3848,24 @@ public class MainActivity extends Activity {
                     .append("vh) scale(").append(z / 100f).append(")!important;");
             css.append("}");
         }
-        String js = "(function(){window.__mhcss=" + JSONObject.quote(css.toString()) + ";"
+        String js = "(function(){window.__mhcss=" + JSONObject.quote(css.toString()) + ";window.__mhfont="
+                + (pf > 0) + ";"
+                + "function mw(el,fmt){var cs=getComputedStyle(el),t=document.createElement('span');"
+                + "t.style.cssText='position:absolute;visibility:hidden;white-space:nowrap;font-family:'+cs.fontFamily"
+                + "+';font-size:'+cs.fontSize+';font-weight:'+cs.fontWeight;document.body.appendChild(t);var m=0;"
+                + "for(var d=0;d<10;d++){t.textContent=fmt.replace(/d/g,d);m=Math.max(m,t.getBoundingClientRect().width);}"
+                + "document.body.removeChild(t);return Math.ceil(m);}"
+                + "function fix(){var ct=document.querySelector('.currentTime');if(!ct||ct.children.length<2)return;"
+                + "var a=ct.children[0],b=ct.children[1];"
+                + "if(!window.__mhfont){if(window.__mhk){a.style.minWidth='';b.style.minWidth='';window.__mhk=null;}return;}"
+                + "if(document.fonts&&document.fonts.status==='loading')return;"
+                + "var k=getComputedStyle(a).fontFamily+getComputedStyle(a).fontSize+(document.fonts?document.fonts.size:0);"
+                + "if(window.__mhk===k&&a.style.minWidth)return;"
+                + "a.style.minWidth=mw(a,'dd:dd')+'px';a.style.textAlign='center';"
+                + "b.style.minWidth=mw(b,':dd')+'px';b.style.textAlign='center';window.__mhk=k;}"
                 + "function ap(){var s=document.getElementById('mh-style');"
                 + "if(!s){s=document.createElement('style');s.id='mh-style';(document.head||document.body).appendChild(s);}"
-                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;}"
+                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();}"
                 + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);})()";
         webView.evaluateJavascript(js, null);
     }
@@ -3794,12 +3874,11 @@ public class MainActivity extends Activity {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final String[] pfn = FONT_NAMES.clone();
-        pfn[0] = "خط الصفحة الأصلي";
-        l.add("🔤  خط صفحة المواقيت:  " + pfn[Math.max(0, Math.min(pfn.length - 1, prefs.getInt("page_font", 0)))]);
-        a.add(() -> choice("خط صفحة المواقيت", pfn, prefs.getInt("page_font", 0), i -> {
-            prefs.edit().putInt("page_font", i).apply();
-            applyPageCss();
-            showPageElements();
+        pfn[0] = "الافتراضي (النظام / الصفحة الأصلية)";
+        l.add("🔤  الخط (اللانشر + الصفحة معاً):  " + pfn[Math.max(0, Math.min(pfn.length - 1, prefs.getInt("font", 0)))]);
+        a.add(() -> choice("الخط (يطبّق على اللانشر وصفحة المواقيت وبطاقة الطقس)", pfn, prefs.getInt("font", 0), i -> {
+            prefs.edit().putInt("font", i).apply();
+            recreate();
         }, this::showPageElements));
         for (final String[] e : PG) {
             l.add(e[1] + ":  " + pgSummary(e[0]));
@@ -3812,7 +3891,7 @@ public class MainActivity extends Activity {
                 ed.remove("pg_" + e[0] + "_x").remove("pg_" + e[0] + "_y")
                         .remove("pg_" + e[0] + "_s").remove("pg_" + e[0] + "_h");
             }
-            ed.remove("page_font").apply();
+            ed.apply();
             applyPageCss();
             showPageElements();
         });
@@ -3866,6 +3945,10 @@ public class MainActivity extends Activity {
             + "+(e.className&&e.className.baseVal===undefined?'.'+String(e.className).trim().split(/\\s+/).join('.'):'')"
             + "+' ['+Math.round(r.left)+','+Math.round(r.top)+' '+Math.round(r.width)+'x'+Math.round(r.height)+']'"
             + "+' pos='+cs.position+' disp='+cs.display+' fs='+cs.fontSize+(t?' \"'+t.substring(0,40)+'\"':''));}"
+            + "var bg=[];['html','body','.main','.sub-main','.top-content','.prayers'].forEach(function(q){"
+            + "var e=document.querySelector(q);if(!e)return;var c=getComputedStyle(e);"
+            + "bg.push(q+' bg='+String(c.backgroundImage).substring(0,160)+' col='+c.backgroundColor+' size='+c.backgroundSize);});"
+            + "o.push('BACKGROUNDS\\n'+bg.join('\\n'));"
             + "return 'viewport '+innerWidth+'x'+innerHeight+' body.class='+document.body.className"
             + "+' iframes='+document.getElementsByTagName('iframe').length+'\\n'+o.join('\\n');})()";
 

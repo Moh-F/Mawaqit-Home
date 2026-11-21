@@ -188,6 +188,13 @@ public final class Updater {
         String cmd = "pm install -r '" + path + "' && rm -f '" + path + "' && am start -n "
                 + c.getPackageName() + "/.MainActivity --ez postupdate true"
                 + (idleMs > 0 ? " --ez resume_saver true --el idle_ms " + idleMs : "");
+        if (AdbShell.blocked(c)) {       // this device refuses self-ADB: go straight to the system installer
+            AppLog.info("UPDATE", "ADB known to be blocked here, using the system installer");
+            MAIN.post(new Runnable() {
+                @Override public void run() { cb.done(false, "ADB blocked"); }
+            });
+            return;
+        }
         AppLog.info("UPDATE", "installing: " + cmd);
         AdbShell.run(c, cmd, cb);
     }

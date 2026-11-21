@@ -26,6 +26,11 @@ public final class AdbShell {
 
     private AdbShell() {}
 
+    /** True when this device's adbd hung up on every self-connection last time (e.g. Fire OS). */
+    public static boolean blocked(Context c) {
+        return c.getSharedPreferences("cfg", Context.MODE_PRIVATE).getBoolean("adb_blocked", false);
+    }
+
     private static List<String> hosts() {
         List<String> hosts = new ArrayList<>();
         hosts.add("127.0.0.1");
@@ -54,6 +59,7 @@ public final class AdbShell {
             for (String h : hosts()) {
                 try {
                     conn = MiniAdb.connect(h, 5555, keys);
+                    c.getSharedPreferences("cfg", Context.MODE_PRIVATE).edit().putBoolean("adb_blocked", false).apply();
                     AppLog.info("ADB", "connected via " + h + " (round " + round + ")");
                     return conn;
                 } catch (Throwable t) {
@@ -65,7 +71,11 @@ public final class AdbShell {
                 try { Thread.sleep(2500); } catch (InterruptedException ignored) { }
             }
         }
-        throw new Exception(String.valueOf(last), last);
+        String why = String.valueOf(last);
+        if (why.contains("Broken pipe") || why.contains("EOF") || why.contains("reset")) {
+            c.getSharedPreferences("cfg", Context.MODE_PRIVATE).edit().putBoolean("adb_blocked", true).apply();
+        }
+        throw new Exception(why, last);
     }
 
     /** Deletes this app's ADB key so the next connection asks for authorisation again. */
