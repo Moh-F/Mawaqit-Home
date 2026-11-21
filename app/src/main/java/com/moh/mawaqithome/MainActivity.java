@@ -225,12 +225,12 @@ public class MainActivity extends Activity {
 
     private static class Day {
         String icon = "☁️", date = "";
-        long max, min, hum = -1, rain = -1;
+        long max, min, hum = -1, rain = -1, wind = -1, uv = -1;
     }
 
     private static class WeatherData {
         final Day[] days = new Day[3];
-        long curTemp, curHum;
+        long curTemp, curHum, curFeels = -999, curWind = -1;
         String curIcon = "☁️";
     }
 
@@ -575,7 +575,8 @@ public class MainActivity extends Activity {
         handler.post(tickTask);
         handler.postDelayed(idleTask, 10_000L);
         handler.postDelayed(shiftTask, PIXEL_SHIFT_EVERY_MS);
-        handler.postDelayed(updateTask, 45_000L);
+        handler.postDelayed(updateTask, 20_000L);
+        handler.postDelayed(bgTask, 15_000L);
         handler.postDelayed(watchdogTask, 120_000L);
         try {
             registerReceiver(netRx, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
@@ -795,6 +796,21 @@ public class MainActivity extends Activity {
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,
                                                                               android.webkit.WebResourceRequest r) {
                 String p = r.getUrl().getPath();
+                if (p != null && p.startsWith("/__mhbg/")) {
+                    try {
+                        File bf = Backgrounds.file(MainActivity.this);
+                        if (bf.exists()) {
+                            android.webkit.WebResourceResponse resp = new android.webkit.WebResourceResponse(
+                                    "image/jpeg", null, new java.io.FileInputStream(bf));
+                            java.util.Map<String, String> hd = new HashMap<>();
+                            hd.put("Cache-Control", "no-store");
+                            resp.setResponseHeaders(hd);
+                            return resp;
+                        }
+                    } catch (Exception e) {
+                        AppLog.info("BG", "serve failed: " + e);
+                    }
+                }
                 if (p != null && p.startsWith("/__mhfont/") && p.endsWith(".ttf")) {
                     try {
                         String name = p.substring("/__mhfont/".length());
@@ -1022,15 +1038,21 @@ public class MainActivity extends Activity {
         double[] loc = resolveLocation();
         String head = "https://api.open-meteo.com/v1/forecast?latitude=" + loc[0]
                 + "&longitude=" + loc[1]
-                + "&current=temperature_2m,relative_humidity_2m,weather_code&daily=";
+                + "&current=temperature_2m,relative_humidity_2m,weather_code";
         String tail = "&timezone=auto&forecast_days=3";
+        String curX = ",apparent_temperature,wind_speed_10m";
         String basic = "weather_code,temperature_2m_max,temperature_2m_min";
         String body;
         try {
-            body = httpGet(head + basic + ",relative_humidity_2m_mean,precipitation_probability_max"
-                    + tail);
+            body = httpGet(head + curX + "&daily=" + basic + ",relative_humidity_2m_mean,"
+                    + "precipitation_probability_max,wind_speed_10m_max,uv_index_max" + tail);
         } catch (IOException e) {
-            body = httpGet(head + basic + tail);     // fall back to the basic fields
+            try {
+                body = httpGet(head + "&daily=" + basic + ",relative_humidity_2m_mean,"
+                        + "precipitation_probability_max" + tail);
+            } catch (IOException e2) {
+                body = httpGet(head + "&daily=" + basic + tail);     // fall back to the basic fields
+            }
         }
         JSONObject j = new JSONObject(body);
         WeatherData wd = new WeatherData();
@@ -1039,6 +1061,10 @@ public class MainActivity extends Activity {
         wd.curTemp = Math.round(cur.getDouble("temperature_2m"));
         wd.curHum = Math.round(cur.getDouble("relative_humidity_2m"));
         wd.curIcon = weatherIcon(cur.getInt("weather_code"));
+        if (cur.has("apparent_temperature") && !cur.isNull("apparent_temperature"))
+            wd.curFeels = Math.round(cur.getDouble("apparent_temperature"));
+        if (cur.has("wind_speed_10m") && !cur.isNull("wind_speed_10m"))
+            wd.curWind = Math.round(cur.getDouble("wind_speed_10m"));
 
         JSONObject d = j.getJSONObject("daily");
         JSONArray wc = d.getJSONArray("weather_code");
@@ -1047,6 +1073,8 @@ public class MainActivity extends Activity {
         JSONArray hm = d.optJSONArray("relative_humidity_2m_mean");
         JSONArray rn = d.optJSONArray("precipitation_probability_max");
         JSONArray tm = d.optJSONArray("time");
+        JSONArray wn = d.optJSONArray("wind_speed_10m_max");
+        JSONArray uvA = d.optJSONArray("uv_index_max");
         for (int i = 0; i < 3; i++) {
             Day day = new Day();
             day.icon = weatherIcon(wc.getInt(i));
@@ -1054,6 +1082,8 @@ public class MainActivity extends Activity {
             day.min = Math.round(mn.getDouble(i));
             day.hum = (hm != null && !hm.isNull(i)) ? Math.round(hm.getDouble(i)) : -1;
             day.rain = (rn != null && !rn.isNull(i)) ? Math.round(rn.getDouble(i)) : -1;
+            day.wind = (wn != null && !wn.isNull(i)) ? Math.round(wn.getDouble(i)) : -1;
+            day.uv = (uvA != null && !uvA.isNull(i)) ? Math.round(uvA.getDouble(i)) : -1;
             if (tm != null) {
                 String[] p = tm.getString(i).split("-");       // 2026-11-19
                 if (p.length == 3) {
@@ -1163,18 +1193,25 @@ public class MainActivity extends Activity {
         sp.bottomMargin = wsc(3);
         wSep.setLayoutParams(sp);
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
+        final int gap = wsc(prefs.getInt("w_gap", 6));
+        final int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
+        weatherCity.setVisibility(prefs.getBoolean("w_city", true) ? View.VISIBLE : View.GONE);
+        weatherAge.setVisibility(prefs.getBoolean("w_age", true) ? View.VISIBLE : View.GONE);
+        wSep.setVisibility(prefs.getBoolean("w_city", true) && prefs.getBoolean("w_line", true)
+                ? View.VISIBLE : View.GONE);
         weatherCard.setLayoutDirection(prefs.getInt("w_flip", 0) == 1
                 ? View.LAYOUT_DIRECTION_LTR : View.LAYOUT_DIRECTION_RTL);
         daysBox.setOrientation(cols ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         for (int i = 0; i < 3; i++) {
             LinearLayout row = dayView[i];
+            row.setVisibility(i < nd ? View.VISIBLE : View.GONE);
             View tc = (View) wTemp[i].getParent();
             row.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
             row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.CENTER_VERTICAL);
             row.setPadding(cols ? wsc(6) : 0, wsc(2), cols ? wsc(6) : 0, wsc(2));
-            row.setMinimumHeight(cols ? 0 : wsc(54));
-            wSub[i].setSingleLine(!cols);
-            wSub[i].setMaxLines(cols ? 2 : 1);
+            row.setMinimumHeight(cols ? 0 : wsc(46));
+            wSub[i].setSingleLine(false);
+            wSub[i].setMaxLines(4);
             wTemp[i].setGravity(Gravity.CENTER);
             wSub[i].setGravity(Gravity.CENTER);
             row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
@@ -1186,16 +1223,16 @@ public class MainActivity extends Activity {
                     : al == 2 ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL);
             wDay[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : new LinearLayout.LayoutParams(wsc(96), ViewGroup.LayoutParams.WRAP_CONTENT));
+                    : mlp(wsc(80), 0, gap));
             setPx(wIcon[i], 26);
             wIcon[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : new LinearLayout.LayoutParams(wsc(36), ViewGroup.LayoutParams.WRAP_CONTENT));
+                    : mlp(wsc(34), 0, gap));
             setPx(wTemp[i], 15);
             setPx(wSub[i], 10);
             tc.setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : new LinearLayout.LayoutParams(wsc(136), ViewGroup.LayoutParams.WRAP_CONTENT));
+                    : new LinearLayout.LayoutParams(wsc(128), ViewGroup.LayoutParams.WRAP_CONTENT));
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -1209,8 +1246,15 @@ public class MainActivity extends Activity {
 
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
-        if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + 3 * 112);
-        return wsc(14 + 14 + 96 + 36 + 136);
+        int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
+        if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + nd * 112);
+        return wsc(14 + 14 + 80 + 34 + 128) + 2 * wsc(prefs.getInt("w_gap", 6));
+    }
+
+    private LinearLayout.LayoutParams mlp(int w, int l, int r) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.setMargins(l, 0, r, 0);
+        return p;
     }
 
     /**
@@ -1240,8 +1284,9 @@ public class MainActivity extends Activity {
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{((a * 255 / 100) << 24) | (paletteColors()[0] & 0xFFFFFF),
                         ((a * 255 / 100) << 24) | (paletteColors()[1] & 0xFFFFFF)});
-        bg.setStroke(Math.max(1, dp(1)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
-        bg.setCornerRadius(wsc(16));
+        int bw = prefs.getInt("w_border", 1);
+        if (bw > 0) bg.setStroke(Math.max(1, dp(bw)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
+        bg.setCornerRadius(wsc(prefs.getInt("w_radius", 16)));
         weatherCard.setBackground(bg);
         weatherCard.setVisibility(prefs.getBoolean("w_show", true) ? View.VISIBLE : View.GONE);
     }
@@ -1273,21 +1318,33 @@ public class MainActivity extends Activity {
         if (weather == null) return;
         updateWeatherHeader();
         String[] names = {"اليوم", "غداً", "بعد غد"};
+        String sep = prefs.getInt("w_layout", 0) == 1 ? "\n" : "  ";
+        boolean fh = prefs.getBoolean("w_hum", true), fr = prefs.getBoolean("w_rain", true),
+                fw = prefs.getBoolean("w_wind", false), ff = prefs.getBoolean("w_feels", true),
+                fu = prefs.getBoolean("w_uv", false);
         for (int i = 0; i < 3; i++) {
             Day d = weather.days[i];
             wDay[i].setText(dayLabel(names[i], d.date));
-            String sep = prefs.getInt("w_layout", 0) == 1 ? "\n" : "   ";
-            String rain = d.rain >= 0 ? sep + "🌧 " + d.rain + "%" : "";
+            StringBuilder sb = new StringBuilder();
+            long hum = i == 0 ? weather.curHum : d.hum, wind = i == 0 && weather.curWind >= 0
+                    ? weather.curWind : d.wind;
+            if (fh) sb.append("💧 ").append(hum >= 0 ? hum + "%" : "—");
+            if (fr && d.rain >= 0) sb.append(sb.length() > 0 ? sep : "").append("🌧 ").append(d.rain).append("%");
+            if (fw && wind >= 0) sb.append(sb.length() > 0 ? sep : "").append("💨 ").append(wind).append(" km/h");
+            if (fu && d.uv >= 0) sb.append(sb.length() > 0 ? sep : "").append("☀ UV ").append(d.uv);
+            if (ff && i == 0 && weather.curFeels > -900)
+                sb.append(sb.length() > 0 ? sep : "").append("🌡 يُحسّ ").append(weather.curFeels).append("°");
+            wSub[i].setText(sb);
+            wSub[i].setVisibility(sb.length() == 0 ? View.GONE : View.VISIBLE);
             if (i == 0) {
                 wIcon[i].setText(weather.curIcon);
                 wTemp[i].setText(weather.curTemp + "°");
-                wSub[i].setText("💧 " + weather.curHum + "%" + rain);
             } else {
                 wIcon[i].setText(d.icon);
                 wTemp[i].setText(d.max + "° / " + d.min + "°");
-                wSub[i].setText("💧 " + (d.hum >= 0 ? d.hum + "%" : "—") + rain);
             }
         }
+        layoutWeather();
         updateWeatherAge();
         positionWeather();
     }
@@ -1466,20 +1523,171 @@ public class MainActivity extends Activity {
             AppLog.info("SLEEP", "skipped: prayer times unknown, so no wake-up alarm");
             return;
         }
+        if (adminActive()) {
+            try {
+                AppLog.info("SLEEP", "going to sleep (device admin lockNow)");
+                ((DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE)).lockNow();
+                return;
+            } catch (Exception e) {
+                AppLog.error("SLEEP", "lockNow failed", e);
+            }
+        }
+        if (AdbShell.blocked(this)) {
+            AppLog.info("SLEEP", "no ADB and no device-admin permission: cannot sleep");
+            return;
+        }
         AppLog.info("SLEEP", "going to sleep (adb keyevent 223)");
         AdbShell.run(this, "input keyevent 223", new AdbShell.Callback() {
             @Override public void done(boolean ok, String output) {
-                if (ok) return;
-                AppLog.info("SLEEP", "adb failed, trying device admin lockNow");
-                try {
-                    if (adminActive()) {
-                        ((DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE)).lockNow();
-                    }
-                } catch (Exception e) {
-                    AppLog.error("SLEEP", "lockNow failed", e);
-                }
+                if (!ok) AppLog.info("SLEEP", "adb failed: " + output);
             }
         });
+    }
+
+    // ---- background pictures from the internet
+
+    private boolean bgBusy;
+    private long bgRetryAt;
+
+    private int bgSources() {
+        return prefs.getInt("bg_src", 0);
+    }
+
+    private final Runnable bgTask = new Runnable() {
+        @Override public void run() {
+            handler.removeCallbacks(this);
+            handler.postDelayed(this, 60_000L);
+            if (bgSources() == 0 || bgBusy || !online() || System.currentTimeMillis() < bgRetryAt) return;
+            if (bgDue()) bgFetch(false);
+        }
+    };
+
+    private boolean bgDue() {
+        long now = System.currentTimeMillis(), last = prefs.getLong("bg_last", 0);
+        if (!Backgrounds.file(this).exists() || last == 0) return true;
+        if (prefs.getInt("bg_mode", 0) == 0) {
+            return now - last >= prefs.getInt("bg_min", 360) * 60_000L;
+        }
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.set(java.util.Calendar.HOUR_OF_DAY, Math.max(0, Math.min(23, prefs.getInt("bg_hour", 4))));
+        c.set(java.util.Calendar.MINUTE, 0);
+        c.set(java.util.Calendar.SECOND, 0);
+        return now >= c.getTimeInMillis() && last < c.getTimeInMillis();
+    }
+
+    private void bgFetch(final boolean manual) {
+        if (bgBusy) return;
+        bgBusy = true;
+        if (manual) toast("جارٍ تحميل صورة جديدة…");
+        Backgrounds.fetch(this, bgSources(), prefs.getString("bg_links", ""), (ok, credit, err) ->
+                runOnUiThread(() -> {
+                    bgBusy = false;
+                    if (destroyed) return;
+                    if (ok) {
+                        prefs.edit().putLong("bg_last", System.currentTimeMillis())
+                                .putString("bg_credit", credit == null ? "" : credit).apply();
+                        AppLog.info("BG", "new picture: " + credit);
+                        applyPageCss();
+                        if (manual) toast("تم تغيير الخلفية ✓");
+                    } else {
+                        bgRetryAt = System.currentTimeMillis() + 10 * 60_000L;
+                        AppLog.info("BG", "failed: " + err);
+                        if (manual) toast("تعذّر تحميل الصورة: " + err);
+                    }
+                }));
+    }
+
+    private static final int[] BG_MINS = {15, 60, 180, 360, 720, 1440, 4320};
+    private static final String[] BG_MIN_NAMES = {"كل 15 دقيقة", "كل ساعة", "كل 3 ساعات", "كل 6 ساعات",
+            "كل 12 ساعة", "كل يوم", "كل 3 أيام"};
+
+    private void showBgSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final int src = bgSources();
+        StringBuilder sn = new StringBuilder();
+        if ((src & Backgrounds.BING) != 0) sn.append("Bing ");
+        if ((src & Backgrounds.WIKI) != 0) sn.append("ويكيميديا ");
+        if ((src & Backgrounds.OWN) != 0) sn.append("روابطي ");
+        l.add("🌐  المصادر:  " + (src == 0 ? "متوقفة (خلفية Mawaqit الأصلية)" : sn.toString().trim()));
+        a.add(() -> {
+            final boolean[] on = {(src & 1) != 0, (src & 2) != 0, (src & 4) != 0};
+            dialog("مصادر الصور (اختر واحداً أو أكثر)")
+                    .setMultiChoiceItems(new String[]{"Bing — صورة اليوم (جودة عالية)",
+                            "Wikimedia Commons — صور مميزة", "روابطي الخاصة"}, on, null)
+                    .setPositiveButton("حفظ", (d, w) -> {
+                        int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 4 : 0);
+                        prefs.edit().putInt("bg_src", v).apply();
+                        if (v == 0) applyPageCss();
+                        else if (!Backgrounds.file(this).exists()) bgFetch(true);
+                        showBgSettings();
+                    })
+                    .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
+        });
+        final String links = prefs.getString("bg_links", "");
+        l.add("🔗  روابطي الخاصة:  " + Backgrounds.links(links).size() + " رابط");
+        a.add(() -> promptText("روابط صور مباشرة (https) — افصل بينها بمسافة", "https://…/image.jpg", links,
+                v -> {
+                    prefs.edit().putString("bg_links", v).apply();
+                    showBgSettings();
+                }));
+        final boolean daily = prefs.getInt("bg_mode", 0) == 1;
+        l.add("⏱  طريقة التغيير:  " + (daily ? "يومياً الساعة " + prefs.getInt("bg_hour", 4) + ":00"
+                : BG_MIN_NAMES[Math.max(0, java.util.Arrays.binarySearch(BG_MINS, prefs.getInt("bg_min", 360)))]));
+        a.add(() -> choice("متى تتغير الصورة؟", new String[]{"بعد مدة محددة", "يومياً في وقت محدد"},
+                prefs.getInt("bg_mode", 0), i -> {
+                    prefs.edit().putInt("bg_mode", i).apply();
+                    if (i == 0) {
+                        int cur = java.util.Arrays.binarySearch(BG_MINS, prefs.getInt("bg_min", 360));
+                        choice("المدة بين كل صورة وأخرى", BG_MIN_NAMES, Math.max(0, cur), j -> {
+                            prefs.edit().putInt("bg_min", BG_MINS[j]).apply();
+                            showBgSettings();
+                        }, this::showBgSettings);
+                    } else {
+                        numberDialog("ساعة التغيير اليومي (0–23)", "bg_hour", 4, 0, 23, "", null, null,
+                                this::showBgSettings, this::showBgSettings);
+                    }
+                }, this::showBgSettings));
+        l.add("🌑  تعتيم الصورة (لتبقى الأوقات واضحة):  " + prefs.getInt("bg_dim", 35) + "%");
+        a.add(() -> numberDialog("تعتيم الصورة", "bg_dim", 35, 0, 85, "%", null, this::applyPageCss,
+                this::showBgSettings, this::showBgSettings));
+        l.add("🔄  تغيير الصورة الآن");
+        a.add(() -> {
+            if (bgSources() == 0) toast("اختر مصدراً أولاً");
+            else bgFetch(true);
+            showBgSettings();
+        });
+        String cr = prefs.getString("bg_credit", "");
+        l.add("©  المصدر الحالي:  " + (cr.isEmpty() ? "—" : cr));
+        a.add(this::showBgSettings);
+        menu("صور الخلفية من الإنترنت", l, a, this::showLauncherSettings);
+    }
+
+    private void showAdminDialog() {
+        final boolean on = adminActive();
+        dialog("صلاحية «مدير الجهاز» (نوم الجهاز)")
+                .setMessage("تسمح للانشر بقفل الجهاز/إطفاء الشاشة بعد التعتيم الكامل بدون ADB. "
+                        + "الحالة الحالية: " + (on ? "مفعّلة ✓" : "غير مفعّلة")
+                        + "\n\nعند التفعيل ستظهر نافذة من أندرويد، وافق عليها. وإن لم تناسبك ألغها من هنا.")
+                .setPositiveButton(on ? "إلغاء الصلاحية" : "تفعيل", (d, w) -> {
+                    try {
+                        ComponentName cn = new ComponentName(this, AdminReceiver.class);
+                        if (on) {
+                            ((DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE)).removeActiveAdmin(cn);
+                            toast("أُلغيت الصلاحية");
+                        } else {
+                            Intent i = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+                            i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, cn);
+                            i.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                    "لقفل الشاشة بعد التعتيم الكامل");
+                            startActivity(i);
+                        }
+                    } catch (Exception e) {
+                        AppLog.error("ADMIN", "request failed", e);
+                        toast("هذا الجهاز لا يدعم هذه الصلاحية");
+                    }
+                })
+                .setNegativeButton("إغلاق", null).show();
     }
 
     // ------------------------------------------------------------- Updates
@@ -1505,16 +1713,23 @@ public class MainActivity extends Activity {
                 int mode = prefs.getInt("upd_mode", 1);
                 if (manual) {
                     askInstall();
-                } else if (mode == 2) {
-                    downloadUpdate(false);
-                } else if (prefs.getInt("upd_notified", 0) != info.code) {
-                    prefs.edit().putInt("upd_notified", info.code).apply();
-                    showBubble("⬆ تحديث متاح: " + info.name + " — ⚙ ← إعدادات Mawaqit Home ← التحديثات",
-                            12000L);
+                } else {
+                    if (mode == 2) downloadUpdate(false);
+                    // tell the user: a dialog once per app start (when nothing else is open), else a bubble
+                    if (!updShown && openDialogs == 0 && stage == 0 && resumed) {
+                        updShown = true;
+                        askInstall();
+                    } else if (prefs.getInt("upd_notified", 0) != info.code) {
+                        prefs.edit().putInt("upd_notified", info.code).apply();
+                        showBubble("⬆ تحديث متاح: " + info.name + " — ⚙ ← إعدادات Mawaqit Home ← التحديثات",
+                                12000L);
+                    }
                 }
             }
         });
     }
+
+    private boolean updShown;
 
     private void askInstall() {
         if (pendingInfo == null) return;
@@ -2502,7 +2717,9 @@ public class MainActivity extends Activity {
             bg.setCornerRadius(dp(22));
             bg.setStroke(dp(1), withAlpha(acc(), Math.min(255, pct * 255 / 100)));
             root.setBackground(bg);
-            root.setPadding(dp(10), dp(6), dp(10), dp(10));
+            root.setPadding(dp(10), dp(6), dp(10), dp(14));
+            root.setClipChildren(false);
+            root.setClipToPadding(false);
 
             TextView tt = new TextView(MainActivity.this);
             tt.setText(title);
@@ -2515,7 +2732,7 @@ public class MainActivity extends Activity {
             root.addView(tt, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            int maxH = Math.max(dp(160), Math.round(dm.heightPixels * 0.90f) - dp(150));
+            int maxH = Math.max(dp(160), Math.round(dm.heightPixels * 0.88f) - dp(215));
             CapFrame body = new CapFrame(maxH);
             if (adapter != null || multi) {
                 final BaseAdapter ad;
@@ -2616,7 +2833,7 @@ public class MainActivity extends Activity {
                 });
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
                         ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                lp.setMargins(dp(5), dp(8), dp(5), 0);
+                lp.setMargins(dp(5), dp(8), dp(5), dp(4));
                 row.addView(bt, lp);
                 if (i == 2 || firstBtn == null) firstBtn = bt;
             }
@@ -2709,7 +2926,7 @@ public class MainActivity extends Activity {
         @Override public View getView(int pos, View cv, ViewGroup parent) {
             TextView t = cv instanceof TextView ? (TextView) cv : newMenuRow();
             t.setText(labels[pos]);
-            t.setTypeface(tf(pos == sel));
+            t.setTypeface(tf(false));
             return t;
         }
     }
@@ -2752,11 +2969,7 @@ public class MainActivity extends Activity {
         final ListView lv = d.getListView();
         lv.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
-                lastPos.put(title, pos);
-                if (ad.sel != pos) {
-                    ad.sel = pos;
-                    ad.notifyDataSetChanged();
-                }
+                lastPos.put(title, pos);   // no adapter refresh here: it re-laid the list and ate a DOWN press
             }
 
             @Override public void onNothingSelected(AdapterView<?> parent) {
@@ -3066,6 +3279,10 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("boot", !prefs.getBoolean("boot", true)).apply();
             showLauncherSettings();
         });
+        l.add("🔒  مدير الجهاز (نوم الجهاز):  " + (adminActive() ? "مفعّل" : "غير مفعّل"));
+        a.add(this::showAdminDialog);
+        l.add("🖼  صور الخلفية من الإنترنت:  " + (bgSources() == 0 ? "متوقفة" : "تعمل"));
+        a.add(this::showBgSettings);
         l.add("🔌  اتصال ADB الذاتي");
         a.add(this::showAdbDialog);
         l.add("📋  سجل الأخطاء ومشاركته");
@@ -3598,6 +3815,16 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
+        l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 6));
+        a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 6, 0, 30, "", null,
+                this::layoutWeather, back, back));
+        l.add("📆  عدد الأيام:  " + prefs.getInt("w_days", 3));
+        a.add(() -> numberDialog("عدد الأيام المعروضة", "w_days", 3, 1, 3, "", null, this::layoutWeather,
+                back, back));
+        l.add("🧩  المعلومات المعروضة (رطوبة، مطر، رياح، UV، يُحسّ)");
+        a.add(this::showWeatherFields);
+        l.add("🎨  الشكل (الزوايا والإطار والخط الفاصل)");
+        a.add(this::showWeatherLook);
         l.add("🕌  إخفاء البطاقة وقت الأذان:  " + onOff(prefs.getBoolean("w_hide_adhan", true)));
         a.add(() -> {
             prefs.edit().putBoolean("w_hide_adhan", !prefs.getBoolean("w_hide_adhan", true)).apply();
@@ -3618,6 +3845,43 @@ public class MainActivity extends Activity {
             toast("جارٍ التحديث…");
         });
         menu("بطاقة الطقس", l, a, this::showLauncherSettings);
+    }
+
+    private void showWeatherFields() {
+        final String[] keys = {"w_hum", "w_rain", "w_wind", "w_uv", "w_feels", "w_city", "w_age"};
+        final boolean[] def = {true, true, false, false, true, true, true};
+        final String[] names = {"💧 الرطوبة", "🌧 احتمال المطر", "💨 سرعة الرياح", "☀ مؤشر الأشعة UV",
+                "🌡 الحرارة المحسوسة (اليوم)", "📍 اسم المدينة", "🕐 وقت آخر تحديث"};
+        final boolean[] on = new boolean[keys.length];
+        for (int i = 0; i < keys.length; i++) on[i] = prefs.getBoolean(keys[i], def[i]);
+        dialog("المعلومات المعروضة في البطاقة").setMultiChoiceItems(names, on, null)
+                .setPositiveButton("حفظ", (d, w) -> {
+                    SharedPreferences.Editor ed = prefs.edit();
+                    for (int i = 0; i < keys.length; i++) ed.putBoolean(keys[i], on[i]);
+                    ed.apply();
+                    updateWeatherUi();
+                    showWeatherSettings();
+                })
+                .setNegativeButton("إلغاء", (d, w) -> showWeatherSettings()).show();
+    }
+
+    private void showWeatherLook() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showWeatherLook;
+        l.add("⬭  استدارة الزوايا:  " + prefs.getInt("w_radius", 16));
+        a.add(() -> numberDialog("استدارة زوايا البطاقة", "w_radius", 16, 0, 40, "", null,
+                this::applyWeatherStyle, back, back));
+        l.add("▭  سماكة الإطار:  " + prefs.getInt("w_border", 1));
+        a.add(() -> numberDialog("سماكة الإطار (0 = بلا إطار)", "w_border", 1, 0, 4, "", "بلا إطار",
+                this::applyWeatherStyle, back, back));
+        l.add("➖  الخط الفاصل تحت المدينة:  " + onOff(prefs.getBoolean("w_line", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("w_line", !prefs.getBoolean("w_line", true)).apply();
+            layoutWeather();
+            showWeatherLook();
+        });
+        menu("شكل بطاقة الطقس", l, a, this::showWeatherSettings);
     }
 
     private void showLocationSettings() {
@@ -3790,14 +4054,58 @@ public class MainActivity extends Activity {
     }
 
     private void showLogDialog() {
-        File f = AppLog.file();
-        showInfo("سجل الأخطاء", "آخر الأحداث (للقراءة بالكامل استخدم «مشاركة عبر الشبكة»):",
-                (f != null ? f.getAbsolutePath() + "\n\n" : "") + AppLog.tail(40),
-                "مشاركة عبر الشبكة", this::startLogServer, "فحص بنية الصفحة", this::inspectPage,
-                "مسح السجل", () -> {
-                    AppLog.clear();
-                    toast("تم المسح");
-                });
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("📧  إرسال التقرير بالبريد (السجل + بنية الصفحة)");
+        a.add(() -> emailReport(true));
+        l.add("📧  إرسال السجل فقط بالبريد");
+        a.add(() -> emailReport(false));
+        l.add("👁  عرض آخر الأحداث");
+        a.add(() -> dialog("آخر الأحداث").setMessage(AppLog.tail(60))
+                .setPositiveButton("حسناً", null).show());
+        l.add("🌐  مشاركة عبر الشبكة المحلية");
+        a.add(this::startLogServer);
+        l.add("🔎  فحص بنية الصفحة ومشاركته عبر الشبكة");
+        a.add(this::inspectPage);
+        l.add("🗑  مسح السجل");
+        a.add(() -> {
+            AppLog.clear();
+            toast("تم المسح");
+        });
+        menu("سجل الأخطاء والتقارير", l, a, this::showLauncherSettings);
+    }
+
+    /** Opens the mail composer with the report (page structure is refreshed first when asked). */
+    private void emailReport(final boolean withDom) {
+        if (!withDom) {
+            sendMail(reportText(false));
+            return;
+        }
+        toast("جارٍ فحص الصفحة…");
+        webView.evaluateJavascript(JS_DOM, v -> {
+            String r = v == null ? "" : v;
+            try {
+                r = new JSONArray("[" + r + "]").getString(0);
+            } catch (Exception ignored) {
+            }
+            domDump = r;
+            sendMail(reportText(true));
+        });
+    }
+
+    private void sendMail(String body) {
+        if (body.length() > 150_000) body = body.substring(0, 60_000) + "\n…[cut]…\n"
+                + body.substring(body.length() - 85_000);
+        try {
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(Intent.EXTRA_SUBJECT, "Mawaqit Home report " + Updater.currentName(this));
+            i.putExtra(Intent.EXTRA_TEXT, body);
+            startActivity(Intent.createChooser(i, "إرسال التقرير").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            AppLog.error("MAIL", "no mail app", e);
+            toast("لا يوجد تطبيق بريد على هذا الجهاز — استخدم المشاركة عبر الشبكة");
+        }
     }
 
     // ---- page element control (CSS injected into the live Mawaqit page)
@@ -3848,25 +4156,47 @@ public class MainActivity extends Activity {
                     .append("vh) scale(").append(z / 100f).append(")!important;");
             css.append("}");
         }
+        css.append(".currentTime[data-mh]>div:not(#mh-ck){display:none!important}");
+        if (bgSources() != 0 && Backgrounds.file(this).exists()) {
+            float dm = Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f;
+            css.append("body{background-image:linear-gradient(0deg,rgba(0,0,0,").append(dm).append("),rgba(0,0,0,")
+                    .append(dm).append(")),url('/__mhbg/bg.jpg?v=").append(prefs.getLong("bg_last", 0))
+                    .append("')!important;background-size:cover!important;background-position:center!important;")
+                    .append("background-repeat:no-repeat!important}");
+        }
         String js = "(function(){window.__mhcss=" + JSONObject.quote(css.toString()) + ";window.__mhfont="
                 + (pf > 0) + ";"
-                + "function mw(el,fmt){var cs=getComputedStyle(el),t=document.createElement('span');"
-                + "t.style.cssText='position:absolute;visibility:hidden;white-space:nowrap;font-family:'+cs.fontFamily"
-                + "+';font-size:'+cs.fontSize+';font-weight:'+cs.fontWeight;document.body.appendChild(t);var m=0;"
-                + "for(var d=0;d<10;d++){t.textContent=fmt.replace(/d/g,d);m=Math.max(m,t.getBoundingClientRect().width);}"
-                + "document.body.removeChild(t);return Math.ceil(m);}"
-                + "function fix(){var ct=document.querySelector('.currentTime');if(!ct||ct.children.length<2)return;"
-                + "var a=ct.children[0],b=ct.children[1];"
-                + "if(!window.__mhfont){if(window.__mhk){a.style.minWidth='';b.style.minWidth='';window.__mhk=null;}return;}"
+                + "function gw(cs,ch){var t=document.createElement('span');"
+                + "t.style.cssText='position:absolute;visibility:hidden;white-space:pre;font-family:'+cs.fontFamily"
+                + "+';font-size:'+cs.fontSize+';font-weight:'+cs.fontWeight;t.textContent=ch;document.body.appendChild(t);"
+                + "var w=t.getBoundingClientRect().width;document.body.removeChild(t);return w;}"
+                + "function dw(cs){var m=0;for(var d=0;d<10;d++)m=Math.max(m,gw(cs,''+d));return m;}"
+                + "function cp(g,cs){g.style.cssText='display:inline-block;white-space:pre;direction:ltr;font-family:'+cs.fontFamily"
+                + "+';font-size:'+cs.fontSize+';font-weight:'+cs.fontWeight+';color:'+cs.color+';text-shadow:'+cs.textShadow"
+                + "+';line-height:'+cs.lineHeight+';letter-spacing:'+cs.letterSpacing;}"
+                + "function fill(g,tx,w){if(g.__t===tx&&g.__w===w)return;g.__t=tx;g.__w=w;g.textContent='';"
+                + "for(var i=0;i<tx.length;i++){var c=tx.charAt(i),s=document.createElement('span');s.textContent=c;"
+                + "if(c>='0'&&c<='9')s.style.cssText='display:inline-block;text-align:center;width:'+w+'px';g.appendChild(s);}}"
+                + "function fix(){var ct=document.querySelector('.currentTime');if(!ct)return;"
+                + "var o=document.getElementById('mh-ck');"
+                + "if(!window.__mhfont){if(o){o.remove();ct.removeAttribute('data-mh');}return;}"
                 + "if(document.fonts&&document.fonts.status==='loading')return;"
-                + "var k=getComputedStyle(a).fontFamily+getComputedStyle(a).fontSize+(document.fonts?document.fonts.size:0);"
-                + "if(window.__mhk===k&&a.style.minWidth)return;"
-                + "a.style.minWidth=mw(a,'dd:dd')+'px';a.style.textAlign='center';"
-                + "b.style.minWidth=mw(b,':dd')+'px';b.style.textAlign='center';window.__mhk=k;}"
+                + "var kids=[];for(var i=0;i<ct.children.length;i++)if(ct.children[i].id!=='mh-ck')kids.push(ct.children[i]);"
+                + "if(kids.length<2)return;var a=kids[0],b=kids[1],ca=getComputedStyle(a),cb=getComputedStyle(b);"
+                + "var k=ca.fontFamily+ca.fontSize+cb.fontSize+(document.fonts?document.fonts.size:0);"
+                + "if(window.__mhk!==k){window.__mhwa=dw(ca);window.__mhwb=dw(cb);window.__mhk=k;}"
+                + "if(!o){o=document.createElement('div');o.id='mh-ck';"
+                + "o.style.cssText='display:inline-flex;align-items:baseline;white-space:nowrap';"
+                + "o.appendChild(document.createElement('span'));o.appendChild(document.createElement('span'));ct.appendChild(o);}"
+                + "o.style.direction=getComputedStyle(ct).direction;"
+                + "cp(o.children[0],ca);cp(o.children[1],cb);"
+                + "fill(o.children[0],a.textContent,window.__mhwa);fill(o.children[1],b.textContent,window.__mhwb);"
+                + "ct.setAttribute('data-mh','1');}"
                 + "function ap(){var s=document.getElementById('mh-style');"
                 + "if(!s){s=document.createElement('style');s.id='mh-style';(document.head||document.body).appendChild(s);}"
                 + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();}"
-                + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);})()";
+                + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);"
+                + "if(!window.__mhiv2)window.__mhiv2=setInterval(fix,250);})()";
         webView.evaluateJavascript(js, null);
     }
 
@@ -3933,7 +4263,7 @@ public class MainActivity extends Activity {
     private static final String JS_DOM = "(function(){var o=[],n=0;"
             + "function vis(e){var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}"
             + "var all=document.body.getElementsByTagName('*');"
-            + "for(var i=0;i<all.length&&n<260;i++){var e=all[i];if(!vis(e))continue;"
+            + "for(var i=0;i<all.length&&n<900;i++){var e=all[i];if(!vis(e))continue;"
             + "var t='';for(var c=e.firstChild;c;c=c.nextSibling){if(c.nodeType==3)t+=c.nodeValue;}"
             + "t=t.replace(/\\s+/g,' ').trim();"
             + "var leaf=t.length>0||e.tagName=='IMG'||e.tagName=='CANVAS'||e.tagName=='SVG';"
@@ -3948,7 +4278,20 @@ public class MainActivity extends Activity {
             + "var bg=[];['html','body','.main','.sub-main','.top-content','.prayers'].forEach(function(q){"
             + "var e=document.querySelector(q);if(!e)return;var c=getComputedStyle(e);"
             + "bg.push(q+' bg='+String(c.backgroundImage).substring(0,160)+' col='+c.backgroundColor+' size='+c.backgroundSize);});"
+            + "var all2=document.querySelectorAll('*');for(var j=0;j<all2.length&&bg.length<60;j++){var e2=all2[j],c2=getComputedStyle(e2);"
+            + "if(c2.backgroundImage&&c2.backgroundImage!=='none'){bg.push('* '+e2.tagName.toLowerCase()+(e2.id?'#'+e2.id:'')+(e2.className&&e2.className.baseVal===undefined?'.'+String(e2.className).trim().split(/\\s+/).join('.'):'')+' bg='+String(c2.backgroundImage).substring(0,160));}}"
             + "o.push('BACKGROUNDS\\n'+bg.join('\\n'));"
+            + "var im=[];Array.prototype.forEach.call(document.images,function(g){if(im.length<40)im.push(g.src+' '+g.naturalWidth+'x'+g.naturalHeight);});"
+            + "o.push('IMAGES\\n'+im.join('\\n'));"
+            + "var fo=[];try{document.fonts.forEach(function(f){fo.push(f.family+' '+f.weight+' '+f.status);});}catch(x){}"
+            + "o.push('FONTS\\n'+fo.join('\\n'));"
+            + "var ss=[];Array.prototype.forEach.call(document.styleSheets,function(x){ss.push(x.href||'inline');});"
+            + "o.push('STYLESHEETS\\n'+ss.join('\\n'));"
+            + "var sc=[];Array.prototype.forEach.call(document.scripts,function(x){if(x.src)sc.push(x.src);});"
+            + "o.push('SCRIPTS\\n'+sc.join('\\n'));"
+            + "var ls=[];try{for(var q=0;q<localStorage.length&&q<40;q++)ls.push(localStorage.key(q));}catch(x){}"
+            + "o.push('LOCALSTORAGE KEYS\\n'+ls.join(', '));"
+            + "try{o.push('confData keys\\n'+Object.keys(window.confData||{}).join(', '));}catch(x){}"
             + "return 'viewport '+innerWidth+'x'+innerHeight+' body.class='+document.body.className"
             + "+' iframes='+document.getElementsByTagName('iframe').length+'\\n'+o.join('\\n');})()";
 
@@ -3986,12 +4329,14 @@ public class MainActivity extends Activity {
         return null;
     }
 
-    private String reportText() {
+    private String reportText() { return reportText(true); }
+
+    private String reportText(boolean withDom) {
         return "Mawaqit Home " + Updater.currentName(this) + " (" + Updater.currentCode(this) + ")\n"
                 + "Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT
                 + ")  " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL + "\n"
                 + "Screen " + sizeW + "x" + sizeH + "  density " + getResources().getDisplayMetrics().density + "\n\n"
-                + statusText() + "\n\n==== PAGE DOM ====\n" + domDump + "\n\n==== LOG ====\n" + AppLog.all();
+                + statusText() + (withDom ? "\n\n==== PAGE DOM ====\n" + domDump : "") + "\n\n==== LOG ====\n" + AppLog.all();
     }
 
     /** Serves the full log on the local network for 10 minutes, behind a random link. */
