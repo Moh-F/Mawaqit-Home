@@ -168,25 +168,26 @@ final class Backgrounds {
 
     // ------------------------------------------------------------------ video
 
-    static final int V_WIKI = 1, V_PEXELS = 2, V_OWN = 4;
+    static final int V_WIKI = 1, V_PEXELS = 2, V_OWN = 4, V_PIXABAY = 8;
 
     interface VCb {
         void done(boolean ok, String url, String credit, String err);
     }
 
     /** Picks a short free video; nothing is downloaded, the page streams the returned https URL. */
-    static void fetchVideo(final int sources, final String ownLinks, final String pexelsKey,
+    static void fetchVideo(final int sources, final String ownLinks, final String pexelsKey, final String pixabayKey,
                            final String topic, final VCb cb) {
         new Thread(() -> {
             List<Integer> order = new ArrayList<>();
             if ((sources & V_WIKI) != 0) order.add(V_WIKI);
             if ((sources & V_PEXELS) != 0 && pexelsKey != null && pexelsKey.trim().length() > 8) order.add(V_PEXELS);
+            if ((sources & V_PIXABAY) != 0 && pixabayKey != null && pixabayKey.trim().length() > 8) order.add(V_PIXABAY);
             if ((sources & V_OWN) != 0) order.add(V_OWN);
             Collections.shuffle(order);
-            String lastErr = "no video source selected";
+            String lastErr = "no video source selected (or key missing)";
             for (int src : order) {
                 try {
-                    String[] r = pickVideo(src, ownLinks, pexelsKey, topic);
+                    String[] r = pickVideo(src, ownLinks, src == V_PIXABAY ? pixabayKey : pexelsKey, topic);
                     if (r == null) { lastErr = "video source " + src + ": nothing found"; continue; }
                     cb.done(true, r[0], r[1], null);
                     return;
@@ -204,6 +205,25 @@ final class Backgrounds {
             List<String> links = links(own);
             if (links.isEmpty()) return null;
             return new String[]{links.get(rnd.nextInt(links.size())), "رابط خاص"};
+        }
+        if (src == V_PIXABAY) {
+            String j = get("https://pixabay.com/api/videos/?key=" + java.net.URLEncoder.encode(key.trim(), "UTF-8")
+                    + "&q=" + java.net.URLEncoder.encode(topic, "UTF-8")
+                    + "&video_type=film&safesearch=true&per_page=50&page=" + (1 + rnd.nextInt(2)));
+            JSONArray hs = new JSONObject(j).optJSONArray("hits");
+            if (hs == null) return null;
+            List<String[]> ok = new ArrayList<>();
+            for (int i = 0; i < hs.length(); i++) {
+                JSONObject h = hs.getJSONObject(i);
+                if (h.optInt("duration") > 90) continue;
+                JSONObject vv = h.optJSONObject("videos");
+                if (vv == null) continue;
+                JSONObject f = vv.optJSONObject("medium");
+                if (f == null || f.optString("url").isEmpty()) f = vv.optJSONObject("large");
+                if (f == null || f.optString("url").isEmpty()) continue;
+                ok.add(new String[]{f.getString("url"), "Pixabay — " + h.optString("user")});
+            }
+            return ok.isEmpty() ? null : ok.get(rnd.nextInt(ok.size()));
         }
         if (src == V_PEXELS) {
             HttpURLConnection h = openAuth("https://api.pexels.com/videos/search?query="

@@ -233,6 +233,7 @@ public class MainActivity extends Activity {
         final Day[] days = new Day[3];
         long curTemp, curHum, curFeels = -999, curWind = -1;
         String curIcon = "☁️";
+        int phase = 0;            // 0 day, 1 dusk/dawn, 2 night
     }
 
     private interface Pick {
@@ -990,6 +991,14 @@ public class MainActivity extends Activity {
 
     // -------------------------------------------------------------- Weather
 
+    private static String weatherIcon(int c, boolean day) {
+        if (!day) {
+            if (c == 0 || c == 1) return "🌙";
+            if (c == 2) return "☁️";
+        }
+        return weatherIcon(c);
+    }
+
     private static String weatherIcon(int c) {
         if (c == 0) return "☀️";
         if (c == 1) return "🌤";
@@ -1041,12 +1050,12 @@ public class MainActivity extends Activity {
                 + "&longitude=" + loc[1]
                 + "&current=temperature_2m,relative_humidity_2m,weather_code";
         String tail = "&timezone=auto&forecast_days=3";
-        String curX = ",apparent_temperature,wind_speed_10m";
+        String curX = ",apparent_temperature,wind_speed_10m,is_day";
         String basic = "weather_code,temperature_2m_max,temperature_2m_min";
         String body;
         try {
             body = httpGet(head + curX + "&daily=" + basic + ",relative_humidity_2m_mean,"
-                    + "precipitation_probability_max,wind_speed_10m_max,uv_index_max" + tail);
+                    + "precipitation_probability_max,wind_speed_10m_max,uv_index_max,sunrise,sunset" + tail);
         } catch (IOException e) {
             try {
                 body = httpGet(head + "&daily=" + basic + ",relative_humidity_2m_mean,"
@@ -1061,7 +1070,9 @@ public class MainActivity extends Activity {
         JSONObject cur = j.getJSONObject("current");
         wd.curTemp = Math.round(cur.getDouble("temperature_2m"));
         wd.curHum = Math.round(cur.getDouble("relative_humidity_2m"));
-        wd.curIcon = weatherIcon(cur.getInt("weather_code"));
+        boolean isDay = !cur.has("is_day") || cur.optInt("is_day", 1) == 1;
+        wd.curIcon = weatherIcon(cur.getInt("weather_code"), isDay);
+        wd.phase = isDay ? 0 : 2;
         if (cur.has("apparent_temperature") && !cur.isNull("apparent_temperature"))
             wd.curFeels = Math.round(cur.getDouble("apparent_temperature"));
         if (cur.has("wind_speed_10m") && !cur.isNull("wind_speed_10m"))
@@ -1076,6 +1087,16 @@ public class MainActivity extends Activity {
         JSONArray tm = d.optJSONArray("time");
         JSONArray wn = d.optJSONArray("wind_speed_10m_max");
         JSONArray uvA = d.optJSONArray("uv_index_max");
+        try {                                   // dusk/dawn = within 50 min of sunrise/sunset
+            String now = cur.optString("time", "");
+            JSONArray sr = d.optJSONArray("sunrise"), ss = d.optJSONArray("sunset");
+            if (now.length() >= 16 && sr != null && ss != null) {
+                int n = hm(now), r = hm(sr.getString(0)), t = hm(ss.getString(0));
+                if (Math.abs(n - r) <= 50 || Math.abs(n - t) <= 50) wd.phase = 1;
+                else wd.phase = n >= r && n < t ? 0 : 2;
+            }
+        } catch (Exception ignored) {
+        }
         for (int i = 0; i < 3; i++) {
             Day day = new Day();
             day.icon = weatherIcon(wc.getInt(i));
@@ -1095,6 +1116,10 @@ public class MainActivity extends Activity {
             wd.days[i] = day;
         }
         return wd;
+    }
+
+    private static int hm(String iso) {        // "2026-11-21T07:47" -> minutes of day
+        return Integer.parseInt(iso.substring(11, 13)) * 60 + Integer.parseInt(iso.substring(14, 16));
     }
 
     private float unit() {
@@ -1305,9 +1330,15 @@ public class MainActivity extends Activity {
 
     private void applyWeatherStyle() {
         int a = Math.max(0, Math.min(100, prefs.getInt("w_alpha", 55)));
+        int c0 = paletteColors()[0], c1 = paletteColors()[1];
+        if (prefs.getBoolean("w_tod", true) && weather != null) {
+            if (weather.phase == 0) { c0 = 0xFF2B7BB9; c1 = 0xFF6DB6E6; }
+            else if (weather.phase == 1) { c0 = 0xFF6E4A8E; c1 = 0xFFE8955A; }
+            else { c0 = 0xFF0B1B3F; c1 = 0xFF1B2F63; }
+        }
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{((a * 255 / 100) << 24) | (paletteColors()[0] & 0xFFFFFF),
-                        ((a * 255 / 100) << 24) | (paletteColors()[1] & 0xFFFFFF)});
+                new int[]{((a * 255 / 100) << 24) | (c0 & 0xFFFFFF),
+                        ((a * 255 / 100) << 24) | (c1 & 0xFFFFFF)});
         int bw = prefs.getInt("w_border", 1);
         if (bw > 0) bg.setStroke(Math.max(1, dp(bw)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
         bg.setCornerRadius(wsc(prefs.getInt("w_radius", 16)));
@@ -1341,6 +1372,7 @@ public class MainActivity extends Activity {
     private void updateWeatherUi() {
         if (weather == null) return;
         updateWeatherHeader();
+        applyWeatherStyle();
         String[] names = {"اليوم", "غداً", "بعد غد"};
         String sep = prefs.getInt("w_layout", 0) == 1 ? "\n" : "  ";
         boolean fh = prefs.getBoolean("w_hum", true), fr = prefs.getBoolean("w_rain", true),
@@ -1649,7 +1681,7 @@ public class MainActivity extends Activity {
         if (manual) toast("جارٍ تحميل خلفية جديدة…");
         if (bgVideo()) {
             Backgrounds.fetchVideo(bgVSrc(), prefs.getString("bg_vlinks", ""), prefs.getString("bg_pexels", ""),
-                    prefs.getString("bg_topic", "nature landscape"), (ok, url, credit, err) -> {
+                    prefs.getString("bg_pixabay", ""), prefs.getString("bg_topic", "nature landscape"), (ok, url, credit, err) -> {
                         if (ok) prefs.edit().putString("bg_vurl", url).apply();
                         bgDone(manual, ok, credit, err);
                     });
@@ -1708,15 +1740,17 @@ public class MainActivity extends Activity {
             StringBuilder sn = new StringBuilder();
             if ((vs & Backgrounds.V_WIKI) != 0) sn.append("ويكيميديا ");
             if ((vs & Backgrounds.V_PEXELS) != 0) sn.append("Pexels ");
+            if ((vs & Backgrounds.V_PIXABAY) != 0) sn.append("Pixabay ");
             if ((vs & Backgrounds.V_OWN) != 0) sn.append("روابطي ");
             l.add("🌐  مصادر الفيديو:  " + (vs == 0 ? "متوقفة" : sn.toString().trim()));
             a.add(() -> {
-                final boolean[] on = {(vs & 1) != 0, (vs & 2) != 0, (vs & 4) != 0};
+                final boolean[] on = {(vs & 1) != 0, (vs & 2) != 0, (vs & 8) != 0, (vs & 4) != 0};
                 dialog("مصادر الفيديو (اختر واحداً أو أكثر)")
                         .setMultiChoiceItems(new String[]{"Wikimedia Commons — بلا مفتاح",
-                                "Pexels — مجاني (يحتاج مفتاح API مجاني)", "روابطي الخاصة (mp4 / webm)"}, on, null)
+                                "Pexels — مجاني (يحتاج مفتاح API مجاني)", "Pixabay — مجاني (يحتاج مفتاح API مجاني)",
+                                "روابطي الخاصة (mp4 / webm)"}, on, null)
                         .setPositiveButton("حفظ", (d, w) -> {
-                            int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 4 : 0);
+                            int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 8 : 0) | (on[3] ? 4 : 0);
                             prefs.edit().putInt("bg_vsrc", v).apply();
                             if (v == 0) applyPageCss();
                             else if (prefs.getString("bg_vurl", "").isEmpty()) bgFetch(true);
@@ -1728,6 +1762,12 @@ public class MainActivity extends Activity {
             l.add("🔑  مفتاح Pexels:  " + (key.length() > 8 ? "محفوظ ✓" : "غير مُدخل (من pexels.com/api مجاناً)"));
             a.add(() -> promptText("مفتاح Pexels API", "الصق المفتاح هنا", key, v -> {
                 prefs.edit().putString("bg_pexels", v).apply();
+                showBgSettings();
+            }));
+            final String pk = prefs.getString("bg_pixabay", "");
+            l.add("🔑  مفتاح Pixabay:  " + (pk.length() > 8 ? "محفوظ ✓" : "غير مُدخل (من pixabay.com/api/docs مجاناً)"));
+            a.add(() -> promptText("مفتاح Pixabay API", "الصق المفتاح هنا", pk, v -> {
+                prefs.edit().putString("bg_pixabay", v).apply();
                 showBgSettings();
             }));
             final String vl = prefs.getString("bg_vlinks", "");
@@ -2573,6 +2613,7 @@ public class MainActivity extends Activity {
         ImageView iv = new ImageView(this);
         iv.setImageDrawable(a.icon);
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        styleIcon(iv);
         f.addView(iv, new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
 
         if (showStar) {
@@ -2601,6 +2642,45 @@ public class MainActivity extends Activity {
         });
         f.setLayoutParams(new LinearLayout.LayoutParams(tilePx, tilePx));
         return f;
+    }
+
+    static final String[] ICON_STYLES = {"الأصلية كما هي", "مربع بزوايا مدورة", "دائرة", "مجسّمة (ظل وتدرج)",
+            "مسطحة (لون واحد)", "زجاجية شفافة", "تملأ الإطار (مدورة)", "تملأ الإطار (دائرة)", "مربع حاد"};
+
+    /** Draws the app icon on a plate whose shape/finish follows the "icon style" setting. */
+    private void styleIcon(ImageView iv) {
+        final int st = prefs.getInt("icon_style", 0);
+        if (st == 0) return;
+        final boolean circle = st == 2 || st == 7;
+        final float r = circle ? iconPx / 2f : st == 8 ? dp(2) : iconPx * 0.22f;
+        int pad = (st == 6 || st == 7) ? 0 : Math.round(iconPx * (circle ? 0.16f : 0.12f));
+        iv.setPadding(pad, pad, pad, pad);
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(r);
+        int[] pc = paletteColors();
+        if (st == 3) {
+            g.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
+            g.setColors(new int[]{0xFF3A4A44, 0xFF121C18});
+            g.setStroke(Math.max(1, dp(1)), withAlpha(acc(), 0x99));
+            iv.setElevation(dp(6));
+        } else if (st == 4 || st == 8) {
+            g.setColor(0xFF22302A);
+        } else if (st == 5) {
+            g.setColor(0x33FFFFFF);
+            g.setStroke(Math.max(1, dp(1)), 0x88FFFFFF);
+        } else if (st == 1 || st == 2) {
+            g.setColor(0x55000000);
+        } else {
+            g.setColor(Color.TRANSPARENT);
+        }
+        iv.setBackground(g);
+        final float rr = r;
+        iv.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), rr);
+            }
+        });
+        iv.setClipToOutline(true);
     }
 
     private View buildShortcutTile(final Shortcut s, boolean dot) {
@@ -3681,6 +3761,11 @@ public class MainActivity extends Activity {
                     prefs.edit().putInt("rows", i + 1).apply();
                     recreate();
                 }, this::showStripSettings));
+        l.add("🎨  شكل الأيقونات:  " + ICON_STYLES[Math.max(0, Math.min(ICON_STYLES.length - 1, prefs.getInt("icon_style", 0)))]);
+        a.add(() -> choice("شكل الأيقونات", ICON_STYLES, prefs.getInt("icon_style", 0), i -> {
+            prefs.edit().putInt("icon_style", i).apply();
+            recreate();
+        }, this::showStripSettings));
         l.add("🔲  حجم الأيقونات:  " + prefs.getInt("tile_pct", 100) + "%");
         a.add(() -> numberDialog("حجم الأيقونات (يكبر حتى يملأ ارتفاع الشريط)", "tile_pct", 100, 40, 300, "%",
                 null, null, this::recreate, this::showStripSettings));
@@ -3999,6 +4084,12 @@ public class MainActivity extends Activity {
         l.add("▭  سماكة الإطار:  " + prefs.getInt("w_border", 1));
         a.add(() -> numberDialog("سماكة الإطار (0 = بلا إطار)", "w_border", 1, 0, 4, "", "بلا إطار",
                 this::applyWeatherStyle, back, back));
+        l.add("🌗  لون البطاقة حسب الوقت (نهار/غروب/ليل):  " + onOff(prefs.getBoolean("w_tod", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("w_tod", !prefs.getBoolean("w_tod", true)).apply();
+            applyWeatherStyle();
+            showWeatherLook();
+        });
         l.add("➖  الخط الفاصل تحت المدينة:  " + onOff(prefs.getBoolean("w_line", true)));
         a.add(() -> {
             prefs.edit().putBoolean("w_line", !prefs.getBoolean("w_line", true)).apply();
@@ -4794,12 +4885,26 @@ public class MainActivity extends Activity {
         for (Map.Entry<String, ResolveInfo> e : found.entrySet()) {
             ResolveInfo ri = e.getValue();
             AppEntry a = new AppEntry(e.getKey(), ri.activityInfo.name,
-                    ri.loadLabel(pm).toString(), ri.loadIcon(pm), isTv.get(e.getKey()));
+                    ri.loadLabel(pm).toString(), hiIcon(pm, ri), isTv.get(e.getKey()));
             entries.add(a);
             byPkg.put(a.pkg, a);
         }
         sortEntries();
         return true;
+    }
+
+    /** The app's launcher icon taken at the highest density, so it stays sharp on 4K. */
+    private Drawable hiIcon(PackageManager pm, ResolveInfo ri) {
+        try {
+            android.content.pm.ApplicationInfo ai = ri.activityInfo.applicationInfo;
+            int id = ri.activityInfo.icon != 0 ? ri.activityInfo.icon : ai.icon;
+            if (id != 0) {
+                Drawable d = pm.getResourcesForApplication(ai).getDrawableForDensity(id, 640, null);
+                if (d != null) return d;
+            }
+        } catch (Throwable ignored) {
+        }
+        return ri.loadIcon(pm);
     }
 
     // --------------------------------------------------------- Screen saver
