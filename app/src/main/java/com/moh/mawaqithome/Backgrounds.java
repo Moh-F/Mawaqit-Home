@@ -24,6 +24,17 @@ final class Backgrounds {
     private static final String[] ISLAMIC_Q = {"mosque interior", "mosque minaret", "Kaaba Mecca", "Masjid al-Nabawi Medina",
             "Islamic geometric pattern", "Alhambra", "Blue Mosque Istanbul", "Sheikh Zayed Grand Mosque",
             "Dome of the Rock", "Islamic calligraphy", "mihrab", "mosque sunset"};
+    /** 0 normal, 1 high (1080p / 1920 px), 2 maximum (2560 px pictures, Bing UHD). Set by the app before fetching. */
+    static volatile int quality = 0;
+    /** Smart mode: search words chosen from time, weather, Friday, prayer. null = off. */
+    static volatile String smartQ = null;
+    private static final String[] ISLAMIC_VQ = {"mosque", "kaaba mecca", "medina mosque", "ramadan crescent moon",
+            "muslim prayer", "islamic architecture", "mosque interior"};
+
+    private static int imgW() {
+        return quality >= 2 ? 2560 : quality == 1 ? 1920 : 1600;
+    }
+
     private static final String UA = "MawaqitHome/2 (https://github.com/Moh-F/Mawaqit-Home)";
     private static final long MAX_BYTES = 14L * 1024 * 1024;
 
@@ -46,14 +57,19 @@ final class Backgrounds {
             if ((sources & ISLAMIC) != 0) order.add(ISLAMIC);
             if ((sources & PIX_IS) != 0 && pixKey != null && pixKey.trim().length() > 8) order.add(PIX_IS);
             if ((sources & PEX_IS) != 0 && pexKey != null && pexKey.trim().length() > 8) order.add(PEX_IS);
+            if (smartQ != null && order.size() > 1) order.remove((Integer) BING);   // Bing cannot search a theme
             Collections.shuffle(order);
             String lastErr = "no source selected (or key missing)";
             for (int src : order) {
                 try {
-                    String[] r = pick(src, ownLinks, src == PEX_IS ? pexKey : pixKey);          // {url, credit}
+                    String[] r = pick(src, ownLinks, src == PEX_IS ? pexKey : pixKey);          // {url, credit, alt?}
                     if (r == null) { lastErr = "source " + src + ": nothing found"; continue; }
                     File tmp = new File(c.getFilesDir(), "bg_new.tmp");
-                    download(r[0], tmp);
+                    try {
+                        download(r[0], tmp);
+                    } catch (Exception e1) {
+                        if (r.length > 2) download(r[2], tmp); else throw e1;
+                    }
                     BitmapFactory.Options o = new BitmapFactory.Options();
                     o.inJustDecodeBounds = true;
                     BitmapFactory.decodeFile(tmp.getAbsolutePath(), o);
@@ -77,15 +93,16 @@ final class Backgrounds {
 
     private static String[] pick(int src, String own, String key) throws Exception {
         Random rnd = new Random();
-        String iq = ISLAMIC_Q[rnd.nextInt(ISLAMIC_Q.length)];
+        String iq = smartQ != null ? smartQ : ISLAMIC_Q[rnd.nextInt(ISLAMIC_Q.length)];
         if (src == PIX_IS) {
             String j = get("https://pixabay.com/api/?key=" + java.net.URLEncoder.encode(key.trim(), "UTF-8")
                     + "&q=" + java.net.URLEncoder.encode(iq, "UTF-8")
-                    + "&image_type=photo&orientation=horizontal&min_width=1600&safesearch=true&per_page=50");
+                    + "&image_type=photo&orientation=horizontal&min_width=" + imgW() + "&safesearch=true&per_page=50");
             JSONArray hs = new JSONObject(j).optJSONArray("hits");
             if (hs == null || hs.length() == 0) return null;
             JSONObject h = hs.getJSONObject(rnd.nextInt(hs.length()));
-            return new String[]{h.getString("largeImageURL"), "Pixabay — " + h.optString("user") + " (" + iq + ")"};
+            String pu = quality >= 1 ? h.optString("fullHDURL", h.getString("largeImageURL")) : h.getString("largeImageURL");
+            return new String[]{pu, "Pixabay — " + h.optString("user") + " (" + iq + ")"};
         }
         if (src == PEX_IS) {
             HttpURLConnection hc = openAuth("https://api.pexels.com/v1/search?query="
@@ -95,8 +112,10 @@ final class Backgrounds {
             JSONArray ps = new JSONObject(j).optJSONArray("photos");
             if (ps == null || ps.length() == 0) return null;
             JSONObject ph = ps.getJSONObject(rnd.nextInt(ps.length()));
-            return new String[]{ph.getJSONObject("src").getString("large2x"),
-                    "Pexels — " + ph.optString("photographer") + " (" + iq + ")"};
+            JSONObject psrc = ph.getJSONObject("src");
+            String pxu = quality >= 1 && !psrc.optString("original").isEmpty()
+                    ? psrc.getString("original") + "?auto=compress&cs=tinysrgb&w=" + imgW() : psrc.getString("large2x");
+            return new String[]{pxu, "Pexels — " + ph.optString("photographer") + " (" + iq + ")", psrc.getString("large2x")};
         }
         if (src == ISLAMIC) {
             for (int attempt = 0; attempt < 2; attempt++) {
@@ -104,14 +123,14 @@ final class Backgrounds {
                         + java.net.URLEncoder.encode("(incategory:\"Featured_pictures_on_Wikimedia_Commons\" OR "
                         + "incategory:\"Quality_images\") " + iq, "UTF-8")
                         + "&gsrnamespace=6&gsrlimit=30&gsroffset=" + (attempt == 0 ? rnd.nextInt(20) : 0)
-                        + "&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&iiurlwidth=1920&format=json");
+                        + "&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&iiurlwidth=" + imgW() + "&format=json");
                 JSONObject q = new JSONObject(j).optJSONObject("query");
                 if (q == null) continue;
                 JSONObject pages = q.getJSONObject("pages");
                 List<String[]> ok = new ArrayList<>();
                 for (Iterator<String> it = pages.keys(); it.hasNext(); ) {
                     JSONObject ii = pages.getJSONObject(it.next()).getJSONArray("imageinfo").getJSONObject(0);
-                    if (ii.optInt("width") < 1400 || ii.optInt("width") <= ii.optInt("height")) continue;
+                    if (ii.optInt("width") < (quality >= 1 ? 1900 : 1400) || ii.optInt("width") <= ii.optInt("height")) continue;
                     JSONObject em = ii.optJSONObject("extmetadata");
                     String artist = em == null || em.optJSONObject("Artist") == null ? ""
                             : em.getJSONObject("Artist").optString("value", "").replaceAll("<[^>]*>", "").trim();
@@ -128,6 +147,8 @@ final class Backgrounds {
             JSONObject im = new JSONObject(j).getJSONArray("images").getJSONObject(0);
             String u = im.getString("url");
             if (!u.startsWith("http")) u = "https://www.bing.com" + u;
+            if (quality >= 2 && u.contains("1920x1080"))
+                return new String[]{u.replace("1920x1080", "UHD"), "Bing — " + im.optString("copyright", ""), u};
             return new String[]{u, "Bing — " + im.optString("copyright", "")};
         }
         if (src == WIKI) {
@@ -135,16 +156,18 @@ final class Backgrounds {
                 int off = attempt == 0 ? rnd.nextInt(300) : 0;
                 String j = get("https://commons.wikimedia.org/w/api.php?action=query&generator=search"
                         + "&gsrsearch=" + java.net.URLEncoder.encode(
-                        "incategory:\"Featured_pictures_on_Wikimedia_Commons\" landscape", "UTF-8")
+                        smartQ != null ? "(incategory:\"Featured_pictures_on_Wikimedia_Commons\" OR "
+                        + "incategory:\"Quality_images\") " + smartQ
+                        : "incategory:\"Featured_pictures_on_Wikimedia_Commons\" landscape", "UTF-8")
                         + "&gsrnamespace=6&gsrlimit=30&gsroffset=" + off
-                        + "&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&iiurlwidth=1920&format=json");
+                        + "&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&iiurlwidth=" + imgW() + "&format=json");
                 JSONObject q = new JSONObject(j).optJSONObject("query");
                 if (q == null) continue;
                 JSONObject pages = q.getJSONObject("pages");
                 List<String[]> ok = new ArrayList<>();
                 for (Iterator<String> it = pages.keys(); it.hasNext(); ) {
                     JSONObject ii = pages.getJSONObject(it.next()).getJSONArray("imageinfo").getJSONObject(0);
-                    if (ii.optInt("width") < 1600 || ii.optInt("width") <= ii.optInt("height")) continue;
+                    if (ii.optInt("width") < Math.min(imgW(), 1600) || ii.optInt("width") <= ii.optInt("height")) continue;
                     String u = ii.optString("thumburl", ii.optString("url"));
                     JSONObject em = ii.optJSONObject("extmetadata");
                     String artist = em == null || em.optJSONObject("Artist") == null ? ""
@@ -253,6 +276,7 @@ final class Backgrounds {
 
     private static String[] pickVideo(int src, String own, String key, String topic) throws Exception {
         Random rnd = new Random();
+        if ("islamic mix".equals(topic)) topic = ISLAMIC_VQ[rnd.nextInt(ISLAMIC_VQ.length)];
         if (src == V_OWN) {
             List<String> links = links(own);
             if (links.isEmpty()) return null;
@@ -275,7 +299,7 @@ final class Backgrounds {
                     JSONObject c = vv.optJSONObject(k);
                     if (c == null || c.optString("url").isEmpty()) continue;
                     int w = c.optInt("width");
-                    if (w <= 1920 && w >= 640 && (f == null || w > f.optInt("width"))) f = c;
+                    if (w <= (quality >= 1 ? 1920 : 1280) && w >= 640 && (f == null || w > f.optInt("width"))) f = c;
                 }
                 if (f == null) continue;
                 ok.add(new String[]{f.getString("url"), "Pixabay — " + h.optString("user")});
@@ -300,7 +324,8 @@ final class Backgrounds {
                 for (int k = 0; fl != null && k < fl.length(); k++) {
                     JSONObject f = fl.getJSONObject(k);
                     int w = f.optInt("width");
-                    if (!"video/mp4".equals(f.optString("file_type")) || w > 1920 || w < 1280) continue;
+                    if (!"video/mp4".equals(f.optString("file_type")) || w > (quality >= 1 ? 1920 : 1280)
+                            || w < (quality >= 1 ? 1280 : 960)) continue;
                     if (w > bw) { bw = w; best = f.optString("link"); }
                 }
                 if (best != null) ok.add(new String[]{best, "Pexels — " + v.getJSONObject("user").optString("name")});
@@ -335,7 +360,7 @@ final class Backgrounds {
                     int hgt = d.optInt("height");
                     boolean okType = ty.startsWith("video/webm") || (ty.startsWith("video/mp4") && ty.contains("avc"));
                     if (!okType || hgt < 360 || hgt > 1080) continue;
-                    int score = Math.abs(hgt - 720);
+                    int score = Math.abs(hgt - (quality >= 1 ? 1080 : 720));
                     if (best == null || score < bh) { bh = score; best = d.optString("src"); }
                 }
                 if (best == null) continue;

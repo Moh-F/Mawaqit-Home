@@ -235,6 +235,7 @@ public class MainActivity extends Activity {
         long curTemp, curHum, curFeels = -999, curWind = -1;
         String curIcon = "☁️";
         int phase = 0;            // 0 day, 1 dusk/dawn, 2 night
+        int code = -1;            // WMO weather code of the current conditions
     }
 
     private interface Pick {
@@ -453,10 +454,22 @@ public class MainActivity extends Activity {
         }
     };
 
+    private void applyOverscan() {
+        int sw = shiftLayer.getWidth(), sh = shiftLayer.getHeight();
+        if (sw < 100 || sh < 100) return;
+        int mx = 0, my = 0;
+        for (int[] sft : SHIFTS) { mx = Math.max(mx, Math.abs(dp(sft[0]))); my = Math.max(my, Math.abs(dp(sft[1]))); }
+        shiftLayer.setPivotX(sw / 2f);
+        shiftLayer.setPivotY(sh / 2f);
+        shiftLayer.setScaleX(1f + 2f * (mx + dp(1)) / sw);     // overscan: shifting never exposes the root colour
+        shiftLayer.setScaleY(1f + 2f * (my + dp(1)) / sh);
+    }
+
     private final Runnable shiftTask = new Runnable() {
         @Override public void run() {
             boolean on = prefs.getBoolean("px_shift", true);
             shiftIdx = on ? (shiftIdx + 1) % SHIFTS.length : 0;
+            applyOverscan();
             shiftLayer.setTranslationX(dp(SHIFTS[shiftIdx][0]));
             shiftLayer.setTranslationY(dp(SHIFTS[shiftIdx][1]));
             handler.postDelayed(this, PIXEL_SHIFT_EVERY_MS);
@@ -622,6 +635,7 @@ public class MainActivity extends Activity {
         resumed = true;
         webView.onResume();
         webView.resumeTimers();
+        resumeNativeVideo();
         if (resumeSaverPending) {
             resumeSaverPending = false;       // keep the saver running after an update restart
         } else {
@@ -646,7 +660,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         resumed = false;
         try {
-            if (videoMp != null && videoMp.isPlaying()) videoMp.pause();
+            pauseNativeVideo();
         } catch (Exception ignored) {
         }
         webView.onPause();
@@ -1094,6 +1108,7 @@ public class MainActivity extends Activity {
         wd.curHum = Math.round(cur.getDouble("relative_humidity_2m"));
         boolean isDay = !cur.has("is_day") || cur.optInt("is_day", 1) == 1;
         wd.curIcon = weatherIcon(cur.getInt("weather_code"), isDay);
+        wd.code = cur.getInt("weather_code");
         wd.phase = isDay ? 0 : 2;
         if (cur.has("apparent_temperature") && !cur.isNull("apparent_temperature"))
             wd.curFeels = Math.round(cur.getDouble("apparent_temperature"));
@@ -1168,8 +1183,8 @@ public class MainActivity extends Activity {
         weatherCity.setTextColor(0xFFF4C95D);
         weatherCity.setTextDirection(View.TEXT_DIRECTION_RTL);
         weatherCity.setGravity(Gravity.CENTER);
-        weatherCity.setSingleLine(false);
-        weatherCity.setMaxLines(2);
+        weatherCity.setSingleLine(true);
+        weatherCity.setEllipsize(null);
         weatherCard.addView(weatherCity, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -1238,7 +1253,13 @@ public class MainActivity extends Activity {
         sp.bottomMargin = wsc(3);
         wSep.setLayoutParams(sp);
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
+        final boolean oneLine = !cols && prefs.getInt("w_lines", 0) == 1;
         final int gap = wsc(prefs.getInt("w_gap", 4));
+        wHead = 0;
+        if (prefs.getBoolean("w_city", true))
+            wHead = Math.max(wHead, (int) Math.ceil(Layout.getDesiredWidth(weatherCity.getText(), weatherCity.getPaint())));
+        if (prefs.getBoolean("w_age", true))
+            wHead = Math.max(wHead, (int) Math.ceil(Layout.getDesiredWidth(weatherAge.getText(), weatherAge.getPaint())));
         if (!cols) {                                   // measure real text so columns hug their content
             int dW = 0, iW = 0, tW = 0, subW = 0;
             for (int i = 0; i < 3; i++) {
@@ -1270,8 +1291,9 @@ public class MainActivity extends Activity {
             LinearLayout row = dayView[i];
             LinearLayout main = (LinearLayout) row.getChildAt(0);
             row.setVisibility(i < nd ? View.VISIBLE : View.GONE);
-            row.setOrientation(LinearLayout.VERTICAL);
-            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.LEFT);
+            row.setOrientation(oneLine ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+            row.setBaselineAligned(false);
+            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : (oneLine ? Gravity.CENTER_VERTICAL : Gravity.LEFT));
             row.setPadding(cols ? wsc(6) : 0, wsc(3), cols ? wsc(6) : 0, wsc(3));
             row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
@@ -1292,7 +1314,7 @@ public class MainActivity extends Activity {
             wTemp[i].setIncludeFontPadding(false);
             wSub[i].setIncludeFontPadding(false);
             wSub[i].setSingleLine(false);
-            wSub[i].setMaxLines(3);
+            wSub[i].setMaxLines(oneLine ? 1 : 3);
             wSub[i].setGravity(Gravity.CENTER);
             LinearLayout.LayoutParams dl = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -1306,9 +1328,11 @@ public class MainActivity extends Activity {
             wDay[i].setLayoutParams(dl);
             wIcon[i].setLayoutParams(il);
             wTemp[i].setLayoutParams(tl);
-            LinearLayout.LayoutParams sl2 = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams sl2 = oneLine ? new LinearLayout.LayoutParams(
+                    Math.max(1, wRowSub), ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            sl2.topMargin = wsc(1);
+            if (oneLine) sl2.leftMargin = sl2.rightMargin = wsc(5);
+            sl2.topMargin = oneLine ? 0 : wsc(1);
             wSub[i].setLayoutParams(sl2);
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
@@ -1327,10 +1351,12 @@ public class MainActivity extends Activity {
         if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + nd * 112);
         int mainW = (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
                 + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * wsc(prefs.getInt("w_gap", 4));
-        return wsc(14 + 14) + Math.max(mainW, wRowSub + wsc(4));
+        boolean one = prefs.getInt("w_lines", 0) == 1;
+        int body = one ? mainW + (wRowSub > 0 ? wRowSub + wsc(10) : 0) : Math.max(mainW, wRowSub + wsc(4));
+        return wsc(14 + 14) + Math.max(body, wHead + wsc(6));
     }
 
-    private int wRowDay, wRowIcon, wRowTemp, wRowSub;
+    private int wRowDay, wRowIcon, wRowTemp, wRowSub, wHead;
 
     private LinearLayout.LayoutParams mlp(int w, int l, int r) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1663,9 +1689,75 @@ public class MainActivity extends Activity {
             handler.removeCallbacks(this);
             handler.postDelayed(this, 20_000L);
             if (!bgEnabled() || bgBusy || !online() || System.currentTimeMillis() < bgRetryAt) return;
-            if (bgDue()) bgFetch(false);
+            if (bgDue() || smartChanged()) bgFetch(false);
         }
     };
+
+    // ---- smart background: theme chosen from prayer window / Friday / weather / time of day / season
+    private String bgPendingKey = "";
+
+    private boolean smartOn() {
+        return prefs.getInt("bg_sm", 0) != 0;
+    }
+
+    /** {key, image query, video query} or null when nothing special applies. */
+    private String[] smartTheme() {
+        int m = prefs.getInt("bg_sm", 0);
+        if (m == 0) return null;
+        java.util.Random r = new java.util.Random();
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        int now = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE);
+        if ((m & 8) != 0) {
+            int[] t = WakeScheduler.load(prefs);
+            if (t != null) for (int pm : t)
+                if (now >= pm - 15 && now <= pm + 3) {
+                    String[] iq = {"mosque interior", "mihrab", "mosque prayer hall", "minaret mosque sky"};
+                    return new String[]{"prayer", iq[r.nextInt(iq.length)], "mosque"};
+                }
+        }
+        if ((m & 4) != 0 && c.get(java.util.Calendar.DAY_OF_WEEK) == java.util.Calendar.FRIDAY) {
+            boolean mk = r.nextBoolean();
+            return new String[]{"friday", mk ? "Kaaba Mecca" : "Masjid al-Nabawi Medina",
+                    mk ? "kaaba mecca" : "medina mosque"};
+        }
+        WeatherData w = weather;
+        if ((m & 2) != 0 && w != null) {
+            int cd = w.code;
+            if (cd == 71 || cd == 73 || cd == 75 || cd == 77 || cd == 85 || cd == 86)
+                return new String[]{"snow", "snow winter landscape", "snow falling"};
+            if ((cd >= 51 && cd <= 67) || (cd >= 80 && cd <= 82))
+                return new String[]{"rain", "rain drops nature", "rain"};
+            if (cd >= 95) return new String[]{"storm", "thunderstorm lightning", "thunderstorm"};
+            if (cd == 45 || cd == 48) return new String[]{"fog", "fog mist landscape", "fog"};
+            if (w.curTemp >= 32) return new String[]{"hot", "summer sun desert heat", "summer sun"};
+            if (w.curTemp <= 0) return new String[]{"frost", "frost winter landscape", "winter landscape"};
+        }
+        if ((m & 1) != 0) {
+            int ph = w != null ? w.phase : (now >= 360 && now < 1080 ? 0 : 2);
+            int mo = c.get(java.util.Calendar.MONTH);                    // 0..11
+            String season = mo == 11 || mo <= 1 ? "winter" : mo <= 4 ? "spring" : mo <= 7 ? "summer" : "autumn";
+            if (ph == 2) {
+                String[] iq = {"night sky stars", "city night lights", "moon night sky"};
+                return new String[]{"night", iq[r.nextInt(iq.length)], "night sky stars"};
+            }
+            if (ph == 1) return new String[]{"dusk", "sunset sky", "sunset"};
+            String iq = season.equals("winter") ? "winter landscape sunny" : season.equals("spring")
+                    ? "spring blossom nature" : season.equals("summer") ? "summer meadow blue sky" : "autumn forest";
+            String vq = season.equals("winter") ? "winter landscape" : season.equals("spring") ? "spring flowers"
+                    : season.equals("summer") ? "summer beach" : "autumn forest";
+            return new String[]{"day-" + season, iq, vq};
+        }
+        return null;
+    }
+
+    private boolean smartChanged() {
+        if (!smartOn()) return false;
+        long last = prefs.getLong("bg_last", 0);
+        if (System.currentTimeMillis() - last < 3 * 60_000L) return false;
+        String[] t = smartTheme();
+        String key = t == null ? "" : t[0];
+        return !key.equals(prefs.getString("bg_smartkey", ""));
+    }
 
     private static final int[] BG_UNIT_MIN = {1, 60, 1440};
     private static final String[] BG_UNIT_NAMES = {"دقائق", "ساعات", "أيام"};
@@ -1700,6 +1792,7 @@ public class MainActivity extends Activity {
             if (destroyed) return;
             if (ok) {
                 prefs.edit().putLong("bg_last", System.currentTimeMillis())
+                        .putString("bg_smartkey", bgPendingKey)
                         .putString("bg_credit", credit == null ? "" : credit).apply();
                 AppLog.info("BG", "new " + (bgVideo() ? "video" : "picture") + ": " + credit);
                 applyPageCss();
@@ -1716,9 +1809,14 @@ public class MainActivity extends Activity {
         if (bgBusy) return;
         bgBusy = true;
         if (manual) toast("جارٍ تحميل خلفية جديدة…");
+        Backgrounds.quality = prefs.getInt("bg_q", 0);
+        String[] th = smartOn() ? smartTheme() : null;
+        Backgrounds.smartQ = th == null ? null : th[1];
+        bgPendingKey = th == null ? "" : th[0];
+        if (th != null) AppLog.info("BG", "smart theme " + th[0] + " → " + (bgVideo() ? th[2] : th[1]));
         if (bgVideo()) {
             Backgrounds.fetchVideo(bgVSrc(), prefs.getString("bg_vlinks", ""), prefs.getString("bg_pexels", ""),
-                    prefs.getString("bg_pixabay", ""), prefs.getString("bg_topic", "nature landscape"), (ok, url, credit, err) -> {
+                    prefs.getString("bg_pixabay", ""), th != null ? th[2] : prefs.getString("bg_topic", "nature landscape"), (ok, url, credit, err) -> {
                         if (ok) prefs.edit().putString("bg_vurl", url).apply();
                         bgDone(manual, ok, credit, err);
                     });
@@ -1733,9 +1831,11 @@ public class MainActivity extends Activity {
     }
 
     private static final String[] TOPIC_NAMES = {"طبيعة ومناظر", "غيوم وسماء", "بحر وماء", "غابات وجبال",
-            "مدن ليلاً", "نجوم وفضاء", "صحراء", "شلالات وأنهار"};
+            "مدن ليلاً", "نجوم وفضاء", "صحراء", "شلالات وأنهار", "🕌 إسلامي متنوع", "🕌 مساجد",
+            "🕋 الكعبة ومكة", "🕌 المدينة المنورة", "🌙 رمضان والهلال"};
     private static final String[] TOPIC_Q = {"nature landscape", "clouds sky timelapse", "ocean sea waves",
-            "forest mountains", "city night", "stars night sky milky way", "desert dunes", "waterfall river"};
+            "forest mountains", "city night", "stars night sky milky way", "desert dunes", "waterfall river",
+            "islamic mix", "mosque", "kaaba mecca", "medina mosque", "ramadan crescent moon"};
 
     private void showBgSettings() {
         final List<String> l = new ArrayList<>();
@@ -1851,6 +1951,41 @@ public class MainActivity extends Activity {
                 applyPageCss();
                 showBgSettings();
             }, this::showBgSettings));
+        }
+ l.add("✨  جودة الصور/الفيديو:  " + new String[]{"عادية", "عالية (1080p / 1920)", "قصوى (صور 2560)"}[prefs.getInt("bg_q", 0) % 3]);
+        a.add(() -> choice("جودة الصور والفيديو", new String[]{"عادية (أخف وأسرع)", "عالية — 1080p / عرض 1920",
+                "قصوى — صور 2560 (الفيديو يبقى 1080p)"}, prefs.getInt("bg_q", 0), i -> {
+            prefs.edit().putInt("bg_q", i).apply();
+            bgFetch(true);
+            showBgSettings();
+        }, this::showBgSettings));
+        final int sm = prefs.getInt("bg_sm", 0);
+        l.add("🧠  خلفية ذكية:  " + (sm == 0 ? "متوقفة" : "مفعّلة (" + Integer.bitCount(sm) + " قواعد)"));
+        a.add(() -> {
+            final int[] bits = {1, 2, 4, 8};
+            final boolean[] on = new boolean[4];
+            for (int i = 0; i < 4; i++) on[i] = (sm & bits[i]) != 0;
+            dialog("الخلفية الذكية — تختار الموضوع تلقائياً")
+                    .setMultiChoiceItems(new String[]{"حسب الوقت: نهار / غروب / ليل + الفصل",
+                            "حسب الطقس: ثلج / مطر / عاصفة / ضباب / حرّ / صقيع",
+                            "يوم الجمعة: مكة والمدينة",
+                            "قبل الصلاة: مساجد وأجواء الأذان"}, on, null)
+                    .setPositiveButton("حفظ", (d, w) -> {
+                        int v = 0;
+                        for (int i = 0; i < 4; i++) if (on[i]) v |= bits[i];
+                        prefs.edit().putInt("bg_sm", v).putString("bg_smartkey", "").apply();
+                        if (v != 0) bgFetch(true);
+                        showBgSettings();
+                    })
+                    .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
+        });
+        if (vid) {
+            l.add("🌊  حركة هادئة مستمرة (تقريب بطيء):  " + (prefs.getBoolean("bg_drift", true) ? "نعم" : "لا"));
+            a.add(() -> {
+                prefs.edit().putBoolean("bg_drift", !prefs.getBoolean("bg_drift", true)).apply();
+                applyNativeVideo();
+                showBgSettings();
+            });
         }
         l.add("🎞  مدة الانتقال الناعم بين الخلفيات:  " + prefs.getInt("bg_fade", 2) + " ث");
         a.add(() -> numberDialog("مدة الانتقال الناعم (ثوانٍ، 0 = فوري)", "bg_fade", 2, 0, 10, " ث", "فوري", null,
@@ -2432,6 +2567,7 @@ public class MainActivity extends Activity {
         topH = h - stripH;
         pageRatio = topH / (float) h;
         layoutWeather();
+        applyOverscan();
 
         FrameLayout.LayoutParams wl = (FrameLayout.LayoutParams) webView.getLayoutParams();
         applyRootBg();
@@ -4117,6 +4253,13 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
+        l.add("☰  أسطر كل يوم:  " + (prefs.getInt("w_lines", 0) == 1 ? "سطر واحد" : "سطران"));
+        a.add(() -> choice("عدد أسطر كل يوم", new String[]{"سطران (التفاصيل تحت اليوم)", "سطر واحد (كل شيء بسطر)"},
+                prefs.getInt("w_lines", 0), i -> {
+                    prefs.edit().putInt("w_lines", i).apply();
+                    layoutWeather();
+                    showWeatherSettings();
+                }, back));
         l.add("⬌  محاذاة نص اليوم:  " + new String[]{"يمين", "وسط", "يسار"}[prefs.getInt("w_align", 0) % 3]);
         a.add(() -> choice("محاذاة نص اليوم في الصفوف", new String[]{"يمين", "وسط", "يسار"},
                 prefs.getInt("w_align", 0), i -> {
@@ -4952,10 +5095,15 @@ public class MainActivity extends Activity {
 
     // ---- native video background (MediaPlayer on a TextureView behind a transparent WebView)
 
-    private android.view.TextureView videoTv;
-    private android.media.MediaPlayer videoMp;
+    private final android.view.TextureView[] vtv = new android.view.TextureView[2];
+    private final android.graphics.SurfaceTexture[] vst = new android.graphics.SurfaceTexture[2];
+    private final android.media.MediaPlayer[] vmp = new android.media.MediaPlayer[2];
+    private int vcur = -1;
+    private boolean vxf;
+    private FrameLayout videoBox;
+    private android.animation.ValueAnimator driftAnim;
     private String videoPlaying = "";
-    private android.graphics.SurfaceTexture videoSt;
+    private static final long VXF_MS = 1800L;
 
     private boolean nativeVideoWanted() {
         return bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty()
@@ -4963,28 +5111,81 @@ public class MainActivity extends Activity {
     }
 
     private void ensureVideoView() {
-        if (videoTv != null) return;
-        videoTv = new android.view.TextureView(this);
-        videoTv.setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
-            @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
-                videoSt = st;
-                if (nativeVideoWanted()) playNativeVideo(prefs.getString("bg_vurl", ""));
-            }
+        if (videoBox != null) return;
+        videoBox = new FrameLayout(this);
+        for (int i = 0; i < 2; i++) {
+            final int idx = i;
+            vtv[i] = new android.view.TextureView(this);
+            vtv[i].setAlpha(0f);
+            vtv[i].setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+                @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
+                    vst[idx] = st;
+                    applyNativeVideo();
+                }
 
-            @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
-            }
+                @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
+                }
 
-            @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) {
-                stopNativeVideo();
-                videoSt = null;
-                return true;
-            }
+                @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) {
+                    releaseSlot(idx);
+                    vst[idx] = null;
+                    if (vcur == idx) { vcur = -1; videoPlaying = ""; }
+                    return true;
+                }
 
-            @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) {
-            }
-        });
-        shiftLayer.addView(videoTv, 0, new FrameLayout.LayoutParams(
+                @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) {
+                }
+            });
+            videoBox.addView(vtv[i], new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        shiftLayer.addView(videoBox, 0, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        handler.postDelayed(videoTick, 400L);
+    }
+
+    private final Runnable videoTick = new Runnable() {
+        @Override public void run() {
+            try {
+                if (nativeVideoWanted() && vcur >= 0 && !vxf && vmp[vcur] != null && !videoPlaying.isEmpty()) {
+                    android.media.MediaPlayer m = vmp[vcur];
+                    int d = m.getDuration();
+                    if (d >= 12000 && m.isPlaying() && m.getCurrentPosition() > d - VXF_MS - 5000) {
+                        vxf = true;                       // start the same clip again underneath and cross-fade
+                        loadVideo(1 - vcur, videoPlaying);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            handler.postDelayed(this, 300L);
+        }
+    };
+
+    private void startDrift(boolean on) {
+        if (videoBox == null) return;
+        if (!on) {
+            if (driftAnim != null) driftAnim.cancel();
+            driftAnim = null;
+            videoBox.setScaleX(1f);
+            videoBox.setScaleY(1f);
+            videoBox.setTranslationX(0f);
+            return;
+        }
+        if (driftAnim != null) return;
+        driftAnim = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        driftAnim.setDuration(50_000L);
+        driftAnim.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        driftAnim.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        driftAnim.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        driftAnim.addUpdateListener(an -> {
+            float v = (Float) an.getAnimatedValue();
+            videoBox.setPivotX(videoBox.getWidth() * 0.5f);
+            videoBox.setPivotY(videoBox.getHeight() * 0.5f);
+            videoBox.setScaleX(1.0f + 0.07f * v);
+            videoBox.setScaleY(1.0f + 0.07f * v);
+            videoBox.setTranslationX(-videoBox.getWidth() * 0.012f * v);
+        });
+        driftAnim.start();
     }
 
     /** Called whenever the background settings change. */
@@ -4993,70 +5194,125 @@ public class MainActivity extends Activity {
         webView.setBackgroundColor(want ? Color.TRANSPARENT : Color.BLACK);
         if (!want) {
             stopNativeVideo();
-            if (videoTv != null) videoTv.setVisibility(View.GONE);
+            if (videoBox != null) videoBox.setVisibility(View.GONE);
             return;
         }
         ensureVideoView();
-        videoTv.setVisibility(View.VISIBLE);
+        videoBox.setVisibility(View.VISIBLE);
+        startDrift(prefs.getBoolean("bg_drift", true));
         String u = prefs.getString("bg_vurl", "");
-        if (videoSt != null && !u.equals(videoPlaying)) playNativeVideo(u);
+        if (u.isEmpty() || u.equals(videoPlaying)) return;
+        int slot = vcur < 0 ? 0 : 1 - vcur;
+        if (vst[slot] == null) return;              // surface not ready yet: its listener calls us again
+        videoPlaying = u;
+        vxf = true;
+        loadVideo(slot, u);
+    }
+
+    private void releaseSlot(int i) {
+        try {
+            if (vmp[i] != null) vmp[i].release();
+        } catch (Exception ignored) {
+        }
+        vmp[i] = null;
     }
 
     private void stopNativeVideo() {
-        try {
-            if (videoMp != null) {
-                videoMp.release();
-            }
-        } catch (Exception ignored) {
-        }
-        videoMp = null;
+        releaseSlot(0);
+        releaseSlot(1);
+        vcur = -1;
+        vxf = false;
         videoPlaying = "";
+        startDrift(false);
+        handler.removeCallbacks(videoTick);
+        if (videoBox != null) { vtv[0].setAlpha(0f); vtv[1].setAlpha(0f); }
     }
 
-    private void playNativeVideo(final String url) {
-        if (videoSt == null || url.isEmpty()) return;
-        stopNativeVideo();
-        videoPlaying = url;
+    private void pauseNativeVideo() {
+        for (int i = 0; i < 2; i++) {
+            try {
+                if (vmp[i] != null && vmp[i].isPlaying()) vmp[i].pause();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void resumeNativeVideo() {
+        try {
+            if (vcur >= 0 && vmp[vcur] != null && !vmp[vcur].isPlaying()) vmp[vcur].start();
+        } catch (Exception ignored) {
+        }
+        if (videoBox != null) { handler.removeCallbacks(videoTick); handler.postDelayed(videoTick, 400L); }
+    }
+
+    private void loadVideo(final int slot, final String url) {
+        if (vst[slot] == null || url.isEmpty()) { vxf = false; return; }
+        releaseSlot(slot);
         try {
             final android.media.MediaPlayer mp = new android.media.MediaPlayer();
-            videoMp = mp;
+            vmp[slot] = mp;
             mp.setDataSource(url);
-            mp.setSurface(new android.view.Surface(videoSt));
-            mp.setLooping(true);
+            mp.setSurface(new android.view.Surface(vst[slot]));
+            mp.setLooping(false);
             mp.setVolume(0f, 0f);
+            final boolean[] shown = {false};
+            final Runnable reveal = () -> {
+                if (shown[0] || vmp[slot] != mp) return;
+                shown[0] = true;
+                final int old = vcur;
+                vcur = slot;
+                vxf = false;
+                videoErrors = 0;
+                long ms = old < 0 ? 900L : VXF_MS;
+                vtv[slot].animate().alpha(1f).setDuration(ms).start();
+                if (old >= 0 && old != slot) {
+                    vtv[old].animate().alpha(0f).setDuration(ms).withEndAction(() -> {
+                        if (vcur != old) releaseSlot(old);
+                    }).start();
+                }
+            };
             mp.setOnPreparedListener(m -> {
                 try {
-                    fitVideo(m.getVideoWidth(), m.getVideoHeight());
+                    if (vmp[slot] != m) return;
+                    fitVideo(slot, m.getVideoWidth(), m.getVideoHeight());
+                    if (m.getDuration() > 0 && m.getDuration() < 12000) m.setLooping(true);   // too short to cross-fade
                     m.start();
-                    AppLog.info("VIDEO", "native playing " + m.getVideoWidth() + "x" + m.getVideoHeight());
-                    videoErrors = 0;
+                    AppLog.info("VIDEO", "native playing slot " + slot + " " + m.getVideoWidth() + "x"
+                            + m.getVideoHeight() + " dur=" + m.getDuration());
+                    handler.postDelayed(reveal, 1500L);
                 } catch (Exception e) {
                     AppLog.error("VIDEO", "native start failed", e);
                 }
             });
-            mp.setOnVideoSizeChangedListener((m, w, h) -> fitVideo(w, h));
+            mp.setOnInfoListener((m, what, extra) -> {
+                if (what == android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) reveal.run();
+                return false;
+            });
+            mp.setOnVideoSizeChangedListener((m, w, h) -> fitVideo(slot, w, h));
             mp.setOnErrorListener((m, what, extra) -> {
                 AppLog.info("VIDEO", "native error what=" + what + " extra=" + extra + " " + url);
-                videoPlaying = "";
-                if (++videoErrors <= 4 && bgVideo()) handler.postDelayed(() -> bgFetch(false), 3000L);
+                if (vmp[slot] == m) releaseSlot(slot);
+                vxf = false;
+                if (vcur < 0) videoPlaying = "";
+                if (vcur < 0 && ++videoErrors <= 4 && bgVideo()) handler.postDelayed(() -> bgFetch(false), 3000L);
                 return true;
             });
             mp.prepareAsync();
-            AppLog.info("VIDEO", "native load " + url);
+            AppLog.info("VIDEO", "native load slot " + slot + " " + url);
         } catch (Exception e) {
             AppLog.error("VIDEO", "native load failed", e);
-            videoPlaying = "";
+            vxf = false;
+            if (vcur < 0) videoPlaying = "";
         }
     }
 
     /** Scale-to-fill (crop) like CSS object-fit: cover. */
-    private void fitVideo(int vw, int vh) {
-        if (videoTv == null || vw <= 0 || vh <= 0) return;
+    private void fitVideo(int slot, int vw, int vh) {
+        if (vtv[slot] == null || vw <= 0 || vh <= 0) return;
         int sw = Math.max(1, root.getWidth()), sh = Math.max(1, root.getHeight());
-        float s = Math.max(sw / (float) vw, sh / (float) vh);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(Math.round(vw * s), Math.round(vh * s),
-                Gravity.CENTER);
-        videoTv.setLayoutParams(lp);
+        float sc = Math.max(sw / (float) vw, sh / (float) vh);
+        vtv[slot].setLayoutParams(new FrameLayout.LayoutParams(Math.round(vw * sc), Math.round(vh * sc),
+                Gravity.CENTER));
     }
 
     private void stopLogServer() {
@@ -5576,8 +5832,7 @@ public class MainActivity extends Activity {
 
     private void applyRootBg() {
         if (root == null) return;
-        root.setBackground(fillMode && stage == 0 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF05100C, 0xFF0B2A20}) : new ColorDrawable(Color.BLACK));
+        root.setBackground(new ColorDrawable(Color.BLACK));   // black behind everything: no coloured edge lines
     }
 
     private void resizeWebFill(final boolean full, boolean animate) {
