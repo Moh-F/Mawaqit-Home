@@ -203,6 +203,7 @@ public class MainActivity extends Activity {
         final String pkg, cls, label;
         final Drawable icon;
         final boolean tv;
+        Drawable banner;                 // TV banner (only loaded for the rectangular styles)
 
         AppEntry(String pkg, String cls, String label, Drawable icon, boolean tv) {
             this.pkg = pkg;
@@ -1268,20 +1269,25 @@ public class MainActivity extends Activity {
             row.setVisibility(i < nd ? View.VISIBLE : View.GONE);
             View tc = (View) wTemp[i].getParent();
             row.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
-            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.CENTER_VERTICAL);
+            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.BOTTOM);
             row.setPadding(cols ? wsc(6) : 0, wsc(2), cols ? wsc(6) : 0, wsc(2));
             row.setMinimumHeight(cols ? 0 : wsc(46));
             wSub[i].setSingleLine(false);
             wSub[i].setMaxLines(4);
-            wTemp[i].setGravity(Gravity.CENTER);
-            wSub[i].setGravity(Gravity.CENTER);
+            wTemp[i].setGravity(Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM);
+            wSub[i].setGravity(Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM);
+            wDay[i].setIncludeFontPadding(false);
+            wIcon[i].setIncludeFontPadding(false);
+            wTemp[i].setIncludeFontPadding(false);
+            wSub[i].setIncludeFontPadding(false);
+            if (tc instanceof LinearLayout) ((LinearLayout) tc).setGravity(Gravity.BOTTOM);
             row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             setPx(wDay[i], 12);
             int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
             wDay[i].setGravity(cols ? Gravity.CENTER : (al == 1 ? Gravity.CENTER
-                    : al == 2 ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL);
+                    : al == 2 ? Gravity.LEFT : Gravity.RIGHT) | (cols ? Gravity.CENTER_VERTICAL : Gravity.BOTTOM));
             wDay[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     : mlp(wRowDay, 0, gap));
@@ -1294,6 +1300,11 @@ public class MainActivity extends Activity {
             tc.setLayoutParams(cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     : new LinearLayout.LayoutParams(wRowTemp, ViewGroup.LayoutParams.WRAP_CONTENT));
+            if (!cols) {                                  // every column sits on the same bottom line
+                ((LinearLayout.LayoutParams) wDay[i].getLayoutParams()).gravity = Gravity.BOTTOM;
+                ((LinearLayout.LayoutParams) wIcon[i].getLayoutParams()).gravity = Gravity.BOTTOM;
+                ((LinearLayout.LayoutParams) tc.getLayoutParams()).gravity = Gravity.BOTTOM;
+            }
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -2094,7 +2105,11 @@ public class MainActivity extends Activity {
         badge.setClickable(true);
         badge.setOnClickListener(v -> openRail());
 
-        rowScroll = new HorizontalScrollView(this);
+        rowScroll = new HorizontalScrollView(this) {
+            @Override protected int computeScrollDeltaToGetChildRectOnScreen(android.graphics.Rect r) {
+                return 0;                                  // we scroll smoothly ourselves (applyTileFocus)
+            }
+        };
         rowScroll.setHorizontalScrollBarEnabled(false);
         rowScroll.setHorizontalFadingEdgeEnabled(false);
         rowScroll.setFocusable(false);
@@ -2640,8 +2655,30 @@ public class MainActivity extends Activity {
 
     private void applyTileFocus(View v, boolean has) {
         float s = has ? prefs.getInt("zoom", 114) / 100f : 1f;
-        v.animate().scaleX(s).scaleY(s).setDuration(ms(140)).start();
-        v.setTranslationZ(has ? dp(6) : 0f);
+        v.animate().cancel();
+        v.animate().scaleX(s).scaleY(s).translationY(has ? -dp(5) : 0f)
+                .setDuration(has ? ms(260) : ms(200))
+                .setInterpolator(has ? new android.view.animation.OvershootInterpolator(1.4f)
+                        : new DecelerateInterpolator(1.5f)).start();
+        v.setTranslationZ(has ? dp(8) : 0f);
+        if (has && rowScroll != null) {                      // glide the strip so the focused tile is centred
+            View line = (View) v.getParent();
+            int target = line.getLeft() + v.getLeft() + v.getWidth() / 2 - rowScroll.getWidth() / 2;
+            smoothScrollTo(Math.max(0, target));
+        }
+    }
+
+    private android.animation.ValueAnimator scrollAnim;
+
+    private void smoothScrollTo(int x) {
+        if (scrollAnim != null) scrollAnim.cancel();
+        int from = rowScroll.getScrollX();
+        if (from == x) return;
+        scrollAnim = android.animation.ValueAnimator.ofInt(from, x);
+        scrollAnim.setDuration(ms(300));
+        scrollAnim.setInterpolator(new DecelerateInterpolator(1.8f));
+        scrollAnim.addUpdateListener(an -> rowScroll.scrollTo((Integer) an.getAnimatedValue(), 0));
+        scrollAnim.start();
     }
 
     private View buildTile(final AppEntry a, boolean showStar) {
@@ -2653,10 +2690,12 @@ public class MainActivity extends Activity {
         f.setBackground(moving ? moveBackground() : focusBackground());
 
         ImageView iv = new ImageView(this);
-        iv.setImageDrawable(a.icon);
-        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        styleIcon(iv);
-        f.addView(iv, new FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER));
+        boolean ban = rectIcons() && a.banner != null;
+        iv.setImageDrawable(ban ? a.banner : a.icon);
+        iv.setScaleType(ban ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
+        styleIcon(iv, ban);
+        f.addView(iv, new FrameLayout.LayoutParams(rectIcons() ? Math.round(iconPx * 1.6f) : iconPx, iconPx,
+                Gravity.CENTER));
 
         if (showStar) {
             TextView star = text(12, false);
@@ -2682,30 +2721,40 @@ public class MainActivity extends Activity {
                 tick();
             }
         });
-        f.setLayoutParams(new LinearLayout.LayoutParams(tilePx, tilePx));
+        f.setLayoutParams(new LinearLayout.LayoutParams(tileW(), tilePx));
         return f;
     }
 
     static final String[] ICON_STYLES = {"الأصلية كما هي", "مربع بزوايا مدورة", "دائرة", "مجسّمة (ظل وتدرج)",
-            "مسطحة (لون واحد)", "زجاجية شفافة", "تملأ الإطار (مدورة)", "تملأ الإطار (دائرة)", "مربع حاد"};
+            "مسطحة (لون واحد)", "زجاجية شفافة", "تملأ الإطار (مدورة)", "تملأ الإطار (دائرة)", "مربع حاد",
+            "▭ مستطيلة (بانر التطبيق إن وُجد)", "▭ مستطيلة مجسّمة"};
+
+    private boolean rectIcons() {
+        return prefs.getInt("icon_style", 0) >= 9;
+    }
+
+    private int tileW() {
+        return rectIcons() ? Math.round(tilePx * 1.6f) : tilePx;
+    }
 
     /** Draws the app icon on a plate whose shape/finish follows the "icon style" setting. */
-    private void styleIcon(ImageView iv) {
+    private void styleIcon(ImageView iv, boolean hasBanner) {
         final int st = prefs.getInt("icon_style", 0);
         if (st == 0) return;
         final boolean circle = st == 2 || st == 7;
-        final float r = circle ? iconPx / 2f : st == 8 ? dp(2) : iconPx * 0.22f;
-        int pad = (st == 6 || st == 7) ? 0 : Math.round(iconPx * (circle ? 0.10f : 0.06f));
+        final float r = circle ? iconPx / 2f : st == 8 ? dp(2) : iconPx * (st >= 9 ? 0.16f : 0.22f);
+        int pad = (st == 6 || st == 7 || (st == 9 && hasBanner)) ? 0
+                : Math.round(iconPx * (circle ? 0.10f : st >= 9 ? 0.08f : 0.06f));
         iv.setPadding(pad, pad, pad, pad);
         GradientDrawable g = new GradientDrawable();
         g.setCornerRadius(r);
         int[] pc = paletteColors();
-        if (st == 3) {
+        if (st == 3 || st == 10) {
             g.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
             g.setColors(new int[]{0xFF3A4A44, 0xFF121C18});
             g.setStroke(Math.max(1, dp(1)), withAlpha(acc(), 0x99));
             iv.setElevation(dp(6));
-        } else if (st == 4 || st == 8) {
+        } else if (st == 4 || st == 8 || st == 9) {
             g.setColor(0xFF22302A);
         } else if (st == 5) {
             g.setColor(0x33FFFFFF);
@@ -2756,7 +2805,7 @@ public class MainActivity extends Activity {
                 tick();
             }
         });
-        f.setLayoutParams(new LinearLayout.LayoutParams(tilePx, tilePx));
+        f.setLayoutParams(new LinearLayout.LayoutParams(tileW(), tilePx));
         return f;
     }
 
@@ -5114,6 +5163,13 @@ public class MainActivity extends Activity {
             ResolveInfo ri = e.getValue();
             AppEntry a = new AppEntry(e.getKey(), ri.activityInfo.name,
                     ri.loadLabel(pm).toString(), hiIcon(pm, ri), isTv.get(e.getKey()));
+            if (prefs.getInt("icon_style", 0) >= 9) {
+                try {
+                    a.banner = ri.activityInfo.loadBanner(pm);
+                    if (a.banner == null) a.banner = ri.activityInfo.applicationInfo.loadBanner(pm);
+                } catch (Throwable ignored) {
+                }
+            }
             entries.add(a);
             byPkg.put(a.pkg, a);
         }
