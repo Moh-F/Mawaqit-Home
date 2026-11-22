@@ -20,7 +20,10 @@ import java.util.Random;
 
 /** Downloads a background picture from Bing, Wikimedia Commons or the user's own links. */
 final class Backgrounds {
-    static final int BING = 1, WIKI = 2, OWN = 4;
+    static final int BING = 1, WIKI = 2, OWN = 4, ISLAMIC = 8, PIX_IS = 16, PEX_IS = 32;
+    private static final String[] ISLAMIC_Q = {"mosque interior", "mosque minaret", "Kaaba Mecca", "Masjid al-Nabawi Medina",
+            "Islamic geometric pattern", "Alhambra", "Blue Mosque Istanbul", "Sheikh Zayed Grand Mosque",
+            "Dome of the Rock", "Islamic calligraphy", "mihrab", "mosque sunset"};
     private static final String UA = "MawaqitHome/2 (https://github.com/Moh-F/Mawaqit-Home)";
     private static final long MAX_BYTES = 14L * 1024 * 1024;
 
@@ -33,17 +36,21 @@ final class Backgrounds {
     }
 
     /** Runs on a background thread; the callback comes back on that thread too. */
-    static void fetch(final Context c, final int sources, final String ownLinks, final Cb cb) {
+    static void fetch(final Context c, final int sources, final String ownLinks, final String pixKey,
+                      final String pexKey, final Cb cb) {
         new Thread(() -> {
             List<Integer> order = new ArrayList<>();
             if ((sources & BING) != 0) order.add(BING);
             if ((sources & WIKI) != 0) order.add(WIKI);
             if ((sources & OWN) != 0) order.add(OWN);
+            if ((sources & ISLAMIC) != 0) order.add(ISLAMIC);
+            if ((sources & PIX_IS) != 0 && pixKey != null && pixKey.trim().length() > 8) order.add(PIX_IS);
+            if ((sources & PEX_IS) != 0 && pexKey != null && pexKey.trim().length() > 8) order.add(PEX_IS);
             Collections.shuffle(order);
-            String lastErr = "no source selected";
+            String lastErr = "no source selected (or key missing)";
             for (int src : order) {
                 try {
-                    String[] r = pick(src, ownLinks);          // {url, credit}
+                    String[] r = pick(src, ownLinks, src == PEX_IS ? pexKey : pixKey);          // {url, credit}
                     if (r == null) { lastErr = "source " + src + ": nothing found"; continue; }
                     File tmp = new File(c.getFilesDir(), "bg_new.jpg");
                     download(r[0], tmp);
@@ -68,8 +75,53 @@ final class Backgrounds {
         }, "bg-fetch").start();
     }
 
-    private static String[] pick(int src, String own) throws Exception {
+    private static String[] pick(int src, String own, String key) throws Exception {
         Random rnd = new Random();
+        String iq = ISLAMIC_Q[rnd.nextInt(ISLAMIC_Q.length)];
+        if (src == PIX_IS) {
+            String j = get("https://pixabay.com/api/?key=" + java.net.URLEncoder.encode(key.trim(), "UTF-8")
+                    + "&q=" + java.net.URLEncoder.encode(iq, "UTF-8")
+                    + "&image_type=photo&orientation=horizontal&min_width=1600&safesearch=true&per_page=50");
+            JSONArray hs = new JSONObject(j).optJSONArray("hits");
+            if (hs == null || hs.length() == 0) return null;
+            JSONObject h = hs.getJSONObject(rnd.nextInt(hs.length()));
+            return new String[]{h.getString("largeImageURL"), "Pixabay — " + h.optString("user") + " (" + iq + ")"};
+        }
+        if (src == PEX_IS) {
+            HttpURLConnection hc = openAuth("https://api.pexels.com/v1/search?query="
+                    + java.net.URLEncoder.encode(iq, "UTF-8") + "&orientation=landscape&size=large&per_page=40", key.trim());
+            String j;
+            try (InputStream in = hc.getInputStream()) { j = readAll(in); } finally { hc.disconnect(); }
+            JSONArray ps = new JSONObject(j).optJSONArray("photos");
+            if (ps == null || ps.length() == 0) return null;
+            JSONObject ph = ps.getJSONObject(rnd.nextInt(ps.length()));
+            return new String[]{ph.getJSONObject("src").getString("large2x"),
+                    "Pexels — " + ph.optString("photographer") + " (" + iq + ")"};
+        }
+        if (src == ISLAMIC) {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                String j = get("https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch="
+                        + java.net.URLEncoder.encode("(incategory:\"Featured_pictures_on_Wikimedia_Commons\" OR "
+                        + "incategory:\"Quality_images\") " + iq, "UTF-8")
+                        + "&gsrnamespace=6&gsrlimit=30&gsroffset=" + (attempt == 0 ? rnd.nextInt(20) : 0)
+                        + "&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&iiurlwidth=1920&format=json");
+                JSONObject q = new JSONObject(j).optJSONObject("query");
+                if (q == null) continue;
+                JSONObject pages = q.getJSONObject("pages");
+                List<String[]> ok = new ArrayList<>();
+                for (Iterator<String> it = pages.keys(); it.hasNext(); ) {
+                    JSONObject ii = pages.getJSONObject(it.next()).getJSONArray("imageinfo").getJSONObject(0);
+                    if (ii.optInt("width") < 1400 || ii.optInt("width") <= ii.optInt("height")) continue;
+                    JSONObject em = ii.optJSONObject("extmetadata");
+                    String artist = em == null || em.optJSONObject("Artist") == null ? ""
+                            : em.getJSONObject("Artist").optString("value", "").replaceAll("<[^>]*>", "").trim();
+                    ok.add(new String[]{ii.optString("thumburl", ii.optString("url")),
+                            "Wikimedia Commons — " + artist + " (" + iq + ")"});
+                }
+                if (!ok.isEmpty()) return ok.get(rnd.nextInt(ok.size()));
+            }
+            return null;
+        }
         if (src == BING) {
             String j = get("https://www.bing.com/HPImageArchive.aspx?format=js&idx=" + rnd.nextInt(8)
                     + "&n=1&mkt=en-US");

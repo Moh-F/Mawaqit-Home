@@ -517,6 +517,18 @@ public class MainActivity extends Activity {
             @Override public void onProgressChanged(WebView v, int p) {
                 setSplash(25 + p * 75 / 100);
             }
+
+            @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                String m = cm.message();
+                if (m != null && m.startsWith("MHVID")) {
+                    AppLog.info("VIDEO", m);
+                    if (m.startsWith("MHVID playing")) videoErrors = 0;
+                    else if (m.startsWith("MHVID error") && ++videoErrors <= 4 && bgVideo()) {
+                        handler.postDelayed(() -> bgFetch(false), 4000L);     // try another clip
+                    }
+                }
+                return true;
+            }
         });
         webView.setFocusable(false);
         webView.setFocusableInTouchMode(false);
@@ -782,6 +794,7 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
@@ -1603,6 +1616,7 @@ public class MainActivity extends Activity {
     // ---- background pictures / short videos from the internet
 
     private boolean bgBusy;
+    private int videoErrors;
     private long bgRetryAt;
 
     private boolean bgVideo() {
@@ -1687,6 +1701,7 @@ public class MainActivity extends Activity {
                     });
         } else {
             Backgrounds.fetch(this, bgSources(), prefs.getString("bg_links", ""),
+                    prefs.getString("bg_pixabay", ""), prefs.getString("bg_pexels", ""),
                     (ok, credit, err) -> bgDone(manual, ok, credit, err));
         }
     }
@@ -1713,14 +1728,22 @@ public class MainActivity extends Activity {
             if ((src & Backgrounds.BING) != 0) sn.append("Bing ");
             if ((src & Backgrounds.WIKI) != 0) sn.append("ويكيميديا ");
             if ((src & Backgrounds.OWN) != 0) sn.append("روابطي ");
+            if ((src & Backgrounds.ISLAMIC) != 0) sn.append("إسلامية(ويكيميديا) ");
+            if ((src & Backgrounds.PIX_IS) != 0) sn.append("إسلامية(Pixabay) ");
+            if ((src & Backgrounds.PEX_IS) != 0) sn.append("إسلامية(Pexels) ");
             l.add("🌐  المصادر:  " + (src == 0 ? "متوقفة (خلفية Mawaqit الأصلية)" : sn.toString().trim()));
             a.add(() -> {
-                final boolean[] on = {(src & 1) != 0, (src & 2) != 0, (src & 4) != 0};
+                final int[] bits = {1, 2, 8, 16, 32, 4};
+                final boolean[] on = new boolean[bits.length];
+                for (int i = 0; i < bits.length; i++) on[i] = (src & bits[i]) != 0;
                 dialog("مصادر الصور (اختر واحداً أو أكثر)")
-                        .setMultiChoiceItems(new String[]{"Bing — صورة اليوم (جودة عالية)",
-                                "Wikimedia Commons — صور مميزة", "روابطي الخاصة"}, on, null)
+                        .setMultiChoiceItems(new String[]{"Bing — صورة اليوم (مناظر عالمية)",
+                                "Wikimedia Commons — مناظر مميزة", "🕌 إسلامية — Wikimedia (مساجد، كعبة، عمارة، زخارف)",
+                                "🕌 إسلامية — Pixabay (يحتاج المفتاح)", "🕌 إسلامية — Pexels (يحتاج المفتاح)",
+                                "روابطي الخاصة"}, on, null)
                         .setPositiveButton("حفظ", (d, w) -> {
-                            int v = (on[0] ? 1 : 0) | (on[1] ? 2 : 0) | (on[2] ? 4 : 0);
+                            int v = 0;
+                            for (int i = 0; i < bits.length; i++) if (on[i]) v |= bits[i];
                             prefs.edit().putInt("bg_src", v).apply();
                             if (v == 0) applyPageCss();
                             else if (!Backgrounds.file(this).exists()) bgFetch(true);
@@ -1964,10 +1987,17 @@ public class MainActivity extends Activity {
     // ---- fonts, text scale, accent colour
 
     static final String[] FONT_NAMES = {"الخط الافتراضي للنظام", "Tajawal — عصري واضح", "Almarai — حديث مريح",
-            "Amiri — نسخ كلاسيكي", "Scheherazade — خط المصحف", "Lalezar — عناوين عريضة"};
+            "Amiri — نسخ كلاسيكي", "Scheherazade — خط المصحف", "Lalezar — عناوين عريضة",
+            "Cairo — عصري أنيق", "Noto Naskh — نسخ مريح", "Noto Kufi — كوفي حديث", "Reem Kufi — كوفي هندسي",
+            "El Messiri — فخم", "Aref Ruqaa — رقعة", "Mada — بسيط نظيف", "Changa — جريء", "Markazi — كتابي"};
     private static final String[][] FONT_FILES = {null, {"Tajawal-Regular", "Tajawal-Bold"},
             {"Almarai-Regular", "Almarai-Bold"}, {"Amiri-Regular", "Amiri-Bold"},
-            {"ScheherazadeNew-Regular", "ScheherazadeNew-Bold"}, {"Lalezar-Regular", "Lalezar-Regular"}};
+            {"ScheherazadeNew-Regular", "ScheherazadeNew-Bold"}, {"Lalezar-Regular", "Lalezar-Regular"},
+            {"Cairo-Regular", "Cairo-Bold"}, {"NotoNaskhArabic-Regular", "NotoNaskhArabic-Bold"},
+            {"NotoKufiArabic-Regular", "NotoKufiArabic-Bold"}, {"ReemKufi-Regular", "ReemKufi-Bold"},
+            {"ElMessiri-Regular", "ElMessiri-Bold"}, {"ArefRuqaa-Regular", "ArefRuqaa-Bold"},
+            {"Mada-Regular", "Mada-Bold"}, {"Changa-Regular", "Changa-Bold"},
+            {"MarkaziText-Regular", "MarkaziText-Bold"}};
     static final String[] ACC_NAMES = {"ذهبي", "أبيض", "أخضر", "أزرق", "وردي", "برتقالي", "سماوي"};
     private static final int[] ACC = {0xFFF4C95D, 0xFFFFFFFF, 0xFF7BE0A0, 0xFF6AB7FF, 0xFFFF8FC0,
             0xFFFFA14A, 0xFF5FE3E3};
@@ -2386,9 +2416,9 @@ public class MainActivity extends Activity {
         int avail = stripH - labelH - dp(9);
         float scale = prefs.getInt("tile_pct", 100) / 100f;
         int perRow = avail / rows;
-        float base = perRow * 0.88f;
+        float base = perRow * 0.96f;
         tilePx = Math.max(dp(34), Math.min(perRow, Math.round(base * scale)));
-        iconPx = Math.round(tilePx * 0.62f);
+        iconPx = Math.round(tilePx * Math.max(50, Math.min(100, prefs.getInt("icon_fill", 84))) / 100f);
 
         FrameLayout.LayoutParams sl = (FrameLayout.LayoutParams) strip.getLayoutParams();
         sl.height = stripH;
@@ -3766,6 +3796,9 @@ public class MainActivity extends Activity {
             prefs.edit().putInt("icon_style", i).apply();
             recreate();
         }, this::showStripSettings));
+        l.add("🔍  حجم الأيقونة داخل المربع:  " + prefs.getInt("icon_fill", 84) + "%");
+        a.add(() -> numberDialog("حجم الأيقونة داخل المربع (أكبر = أوضح)", "icon_fill", 84, 50, 100, "%",
+                null, null, this::recreate, this::showStripSettings));
         l.add("🔲  حجم الأيقونات:  " + prefs.getInt("tile_pct", 100) + "%");
         a.add(() -> numberDialog("حجم الأيقونات (يكبر حتى يملأ ارتفاع الشريط)", "tile_pct", 100, 40, 300, "%",
                 null, null, this::recreate, this::showStripSettings));
@@ -4412,12 +4445,16 @@ public class MainActivity extends Activity {
                 + ";window.__mhdim=" + (Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f)
                 + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid'),d=document.getElementById('mh-dim');"
                 + "if(!u){if(v)v.remove();if(d)d.remove();return;}"
-                + "if(!v){v=document.createElement('video');v.id='mh-vid';v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;"
+                + "if(!document.getElementById('mh-ref')){var mt=document.createElement('meta');mt.id='mh-ref';mt.name='referrer';mt.content='no-referrer';document.head.appendChild(mt);}"
+                + "if(!v){v=document.createElement('video');v.id='mh-vid';v.addEventListener('error',function(){console.log('MHVID error code='+(v.error?v.error.code:'?')+' '+v.getAttribute('data-u'));});"
+                + "v.addEventListener('playing',function(){console.log('MHVID playing '+v.videoWidth+'x'+v.videoHeight);});"
+                + "v.addEventListener('stalled',function(){console.log('MHVID stalled rs='+v.readyState);});v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;"
                 + "v.setAttribute('playsinline','');v.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;object-fit:cover;z-index:-2;background:#000';"
                 + "document.body.appendChild(v);}"
                 + "if(!d){d=document.createElement('div');d.id='mh-dim';d.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-1;pointer-events:none';document.body.appendChild(d);}"
                 + "d.style.background='rgba(0,0,0,'+window.__mhdim+')';"
-                + "if(v.getAttribute('data-u')!==u){v.setAttribute('data-u',u);v.src=u;try{v.play();}catch(e){}}"
+                + "if(v.getAttribute('data-u')!==u){v.setAttribute('data-u',u);v.src=u;console.log('MHVID load '+u);var pp;try{pp=v.play();if(pp&&pp.catch)pp.catch(function(e){console.log('MHVID play-rejected '+e);});}catch(e){}"
+                + "setTimeout(function(){if(v.readyState<3)console.log('MHVID slow rs='+v.readyState+' ns='+v.networkState+' paused='+v.paused);},12000);}"
                 + "else if(v.paused){try{v.play();}catch(e){}}}"
                 + "window.__mhcss=" + JSONObject.quote(css.toString()) + ";window.__mhfont="
                 + (pf > 0) + ";"
