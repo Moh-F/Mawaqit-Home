@@ -31,13 +31,13 @@ final class Backgrounds {
         void done(boolean ok, String credit, String err);
     }
 
-    static File file(Context c) {
-        return new File(c.getFilesDir(), "bg.jpg");
+    static File file(Context c, int slot) {
+        return new File(c.getFilesDir(), "bg_" + slot + ".jpg");
     }
 
     /** Runs on a background thread; the callback comes back on that thread too. */
     static void fetch(final Context c, final int sources, final String ownLinks, final String pixKey,
-                      final String pexKey, final Cb cb) {
+                      final String pexKey, final int slot, final Cb cb) {
         new Thread(() -> {
             List<Integer> order = new ArrayList<>();
             if ((sources & BING) != 0) order.add(BING);
@@ -52,7 +52,7 @@ final class Backgrounds {
                 try {
                     String[] r = pick(src, ownLinks, src == PEX_IS ? pexKey : pixKey);          // {url, credit}
                     if (r == null) { lastErr = "source " + src + ": nothing found"; continue; }
-                    File tmp = new File(c.getFilesDir(), "bg_new.jpg");
+                    File tmp = new File(c.getFilesDir(), "bg_new.tmp");
                     download(r[0], tmp);
                     BitmapFactory.Options o = new BitmapFactory.Options();
                     o.inJustDecodeBounds = true;
@@ -62,7 +62,7 @@ final class Backgrounds {
                         lastErr = "not a usable picture: " + r[0];
                         continue;
                     }
-                    File dst = file(c);
+                    File dst = file(c, slot);
                     if (dst.exists()) dst.delete();
                     if (!tmp.renameTo(dst)) throw new Exception("rename failed");
                     cb.done(true, r[1], null);
@@ -270,9 +270,14 @@ final class Backgrounds {
                 if (h.optInt("duration") > 90) continue;
                 JSONObject vv = h.optJSONObject("videos");
                 if (vv == null) continue;
-                JSONObject f = vv.optJSONObject("medium");
-                if (f == null || f.optString("url").isEmpty()) f = vv.optJSONObject("large");
-                if (f == null || f.optString("url").isEmpty()) continue;
+                JSONObject f = null;                       // biggest file that is still <= 1920 px wide
+                for (String k : new String[]{"large", "medium", "small", "tiny"}) {
+                    JSONObject c = vv.optJSONObject(k);
+                    if (c == null || c.optString("url").isEmpty()) continue;
+                    int w = c.optInt("width");
+                    if (w <= 1920 && w >= 640 && (f == null || w > f.optInt("width"))) f = c;
+                }
+                if (f == null) continue;
                 ok.add(new String[]{f.getString("url"), "Pixabay — " + h.optString("user")});
             }
             return ok.isEmpty() ? null : ok.get(rnd.nextInt(ok.size()));
@@ -328,9 +333,10 @@ final class Backgrounds {
                     JSONObject d = dv.getJSONObject(k);
                     String ty = d.optString("type");
                     int hgt = d.optInt("height");
-                    if (!ty.startsWith("video/") || hgt < 360 || hgt > 1080) continue;
-                    if (ty.startsWith("video/mp4") || best == null || hgt < bh) { bh = hgt; best = d.optString("src"); }
-                    if (ty.startsWith("video/mp4")) break;
+                    boolean okType = ty.startsWith("video/webm") || (ty.startsWith("video/mp4") && ty.contains("avc"));
+                    if (!okType || hgt < 360 || hgt > 1080) continue;
+                    int score = Math.abs(hgt - 720);
+                    if (best == null || score < bh) { bh = score; best = d.optString("src"); }
                 }
                 if (best == null) continue;
                 if (best.startsWith("//")) best = "https:" + best;

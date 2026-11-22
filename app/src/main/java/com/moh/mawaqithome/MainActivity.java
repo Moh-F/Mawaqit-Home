@@ -445,6 +445,7 @@ public class MainActivity extends Activity {
                 extractPrayerTimes();
                 fetchWeather();
             }
+            if (d != lastDay) autoBackup();
             lastDay = d;
             maybeShowNotice();
             handler.postDelayed(this, 30_000L);
@@ -811,9 +812,10 @@ public class MainActivity extends Activity {
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,
                                                                               android.webkit.WebResourceRequest r) {
                 String p = r.getUrl().getPath();
-                if (p != null && p.startsWith("/__mhbg/")) {
+                if (p != null && p.startsWith("/__mhbg/bg_")) {
                     try {
-                        File bf = Backgrounds.file(MainActivity.this);
+                        File bf = Backgrounds.file(MainActivity.this,
+                                p.endsWith("1.jpg") ? 1 : 0);
                         if (bf.exists()) {
                             android.webkit.WebResourceResponse resp = new android.webkit.WebResourceResponse(
                                     "image/jpeg", null, new java.io.FileInputStream(bf));
@@ -1619,6 +1621,10 @@ public class MainActivity extends Activity {
     private int videoErrors;
     private long bgRetryAt;
 
+    private File bgFile() {
+        return Backgrounds.file(this, prefs.getInt("bg_slot", 0));
+    }
+
     private boolean bgVideo() {
         return prefs.getInt("bg_type", 0) == 1;
     }
@@ -1661,7 +1667,7 @@ public class MainActivity extends Activity {
 
     private boolean bgDue() {
         long now = System.currentTimeMillis(), last = prefs.getLong("bg_last", 0);
-        boolean have = bgVideo() ? !prefs.getString("bg_vurl", "").isEmpty() : Backgrounds.file(this).exists();
+        boolean have = bgVideo() ? !prefs.getString("bg_vurl", "").isEmpty() : bgFile().exists();
         if (!have || last == 0) return true;
         if (prefs.getInt("bg_mode", 0) == 0) return now - last >= bgMinutes() * 60_000L;
         java.util.Calendar c = java.util.Calendar.getInstance();
@@ -1702,7 +1708,10 @@ public class MainActivity extends Activity {
         } else {
             Backgrounds.fetch(this, bgSources(), prefs.getString("bg_links", ""),
                     prefs.getString("bg_pixabay", ""), prefs.getString("bg_pexels", ""),
-                    (ok, credit, err) -> bgDone(manual, ok, credit, err));
+                    1 - prefs.getInt("bg_slot", 0), (ok, credit, err) -> {
+                        if (ok) prefs.edit().putInt("bg_slot", 1 - prefs.getInt("bg_slot", 0)).apply();
+                        bgDone(manual, ok, credit, err);
+                    });
         }
     }
 
@@ -1746,7 +1755,7 @@ public class MainActivity extends Activity {
                             for (int i = 0; i < bits.length; i++) if (on[i]) v |= bits[i];
                             prefs.edit().putInt("bg_src", v).apply();
                             if (v == 0) applyPageCss();
-                            else if (!Backgrounds.file(this).exists()) bgFetch(true);
+                            else if (!bgFile().exists()) bgFetch(true);
                             showBgSettings();
                         })
                         .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
@@ -1825,6 +1834,9 @@ public class MainActivity extends Activity {
                         this::showBgSettings, this::showBgSettings);
             }
         }, this::showBgSettings));
+        l.add("🎞  مدة الانتقال الناعم بين الخلفيات:  " + prefs.getInt("bg_fade", 2) + " ث");
+        a.add(() -> numberDialog("مدة الانتقال الناعم (ثوانٍ، 0 = فوري)", "bg_fade", 2, 0, 10, " ث", "فوري", null,
+                this::applyPageCss, this::showBgSettings));
         l.add("🌑  تعتيم الخلفية (لتبقى الأوقات واضحة):  " + prefs.getInt("bg_dim", 35) + "%");
         a.add(() -> numberDialog("تعتيم الخلفية", "bg_dim", 35, 0, 85, "%", null, this::applyPageCss,
                 this::showBgSettings, this::showBgSettings));
@@ -3510,6 +3522,8 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("boot", !prefs.getBoolean("boot", true)).apply();
             showLauncherSettings();
         });
+        l.add("💾  النسخ الاحتياطي وملفات التعريف (رمضان وغيره)");
+        a.add(this::showBackupMenu);
         l.add("🔒  مدير الجهاز (نوم الجهاز):  " + (adminActive() ? "مفعّل" : "غير مفعّل"));
         a.add(this::showAdminDialog);
         l.add("🖼  صور الخلفية من الإنترنت:  " + (bgEnabled() ? "تعمل" : "متوقفة"));
@@ -4432,27 +4446,38 @@ public class MainActivity extends Activity {
             css.append("}");
         }
         if (pf > 0) css.append(".currentTime>div:not(#mh-ck){display:none!important}");
-        if (!bgVideo() && bgSources() != 0 && Backgrounds.file(this).exists()) {
-            float dm = Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f;
-            css.append("body{background-image:linear-gradient(0deg,rgba(0,0,0,").append(dm).append("),rgba(0,0,0,")
-                    .append(dm).append(")),url('/__mhbg/bg.jpg?v=").append(prefs.getLong("bg_last", 0))
-                    .append("')!important;background-size:cover!important;background-position:center!important;")
-                    .append("background-repeat:no-repeat!important}");
-        }
         final boolean vidOn = bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty();
-        if (vidOn) css.append("html{background:#000!important}body{background:none!important}");
+        final boolean imgOn = !bgVideo() && bgSources() != 0 && bgFile().exists();
+        if (vidOn || imgOn) css.append("html{background:#000!important}body{background:none!important}");
         String js = "(function(){window.__mhvid=" + JSONObject.quote(vidOn ? prefs.getString("bg_vurl", "") : "")
                 + ";window.__mhdim=" + (Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f)
-                + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid'),d=document.getElementById('mh-dim');"
-                + "if(!u){if(v)v.remove();if(d)d.remove();return;}"
+                + ";window.__mhimg=" + JSONObject.quote(imgOn ? "/__mhbg/bg_" + prefs.getInt("bg_slot", 0)
+                        + ".jpg?v=" + prefs.getLong("bg_last", 0) : "")
+                + ";window.__mhfade=" + Math.max(0, Math.min(10, prefs.getInt("bg_fade", 2)))
+                + ";function dim(){var any=window.__mhvid||window.__mhimg,d=document.getElementById('mh-dim');"
+                + "if(!any){if(d)d.remove();return;}"
+                + "if(!d){d=document.createElement('div');d.id='mh-dim';d.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-1;pointer-events:none';document.body.appendChild(d);}"
+                + "d.style.background='rgba(0,0,0,'+window.__mhdim+')';}"
+                + "function img(){var u=window.__mhimg||'';"
+                + "if(!u){for(var q=0;q<2;q++){var o=document.getElementById('mh-i'+q);if(o)o.remove();}window.__mhcur='';window.__mhpend='';return;}"
+                + "for(var k=0;k<2;k++){if(!document.getElementById('mh-i'+k)){var L=document.createElement('div');L.id='mh-i'+k;"
+                + "L.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:0;z-index:-4';document.body.appendChild(L);}}"
+                + "if(window.__mhcur===u||window.__mhpend===u)return;window.__mhpend=u;"
+                + "var im=new Image();im.onload=function(){var nx=window.__mhai===0?1:0,N=document.getElementById('mh-i'+nx),O=document.getElementById('mh-i'+(nx===0?1:0));"
+                + "if(!N)return;N.style.transition='none';N.style.opacity=0;N.style.zIndex=-3;N.style.backgroundImage=\"url('\"+u+\"')\";"
+                + "void N.offsetWidth;N.style.transition='opacity '+window.__mhfade+'s ease-in-out';N.style.opacity=1;"
+                + "window.__mhai=nx;window.__mhcur=u;"
+                + "setTimeout(function(){if(O){O.style.transition='none';O.style.opacity=0;O.style.zIndex=-4;}},window.__mhfade*1000+100);};"
+                + "im.onerror=function(){window.__mhpend='';};im.src=u;}"
+                + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid');"
+                + "if(!u){if(v)v.remove();return;}"
                 + "if(!document.getElementById('mh-ref')){var mt=document.createElement('meta');mt.id='mh-ref';mt.name='referrer';mt.content='no-referrer';document.head.appendChild(mt);}"
                 + "if(!v){v=document.createElement('video');v.id='mh-vid';v.addEventListener('error',function(){console.log('MHVID error code='+(v.error?v.error.code:'?')+' '+v.getAttribute('data-u'));});"
                 + "v.addEventListener('playing',function(){console.log('MHVID playing '+v.videoWidth+'x'+v.videoHeight);});"
-                + "v.addEventListener('stalled',function(){console.log('MHVID stalled rs='+v.readyState);});v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;"
+                + "v.addEventListener('stalled',function(){console.log('MHVID stalled rs='+v.readyState);});"
+                + "v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;"
                 + "v.setAttribute('playsinline','');v.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;object-fit:cover;z-index:-2;background:#000';"
                 + "document.body.appendChild(v);}"
-                + "if(!d){d=document.createElement('div');d.id='mh-dim';d.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-1;pointer-events:none';document.body.appendChild(d);}"
-                + "d.style.background='rgba(0,0,0,'+window.__mhdim+')';"
                 + "if(v.getAttribute('data-u')!==u){v.setAttribute('data-u',u);v.src=u;console.log('MHVID load '+u);var pp;try{pp=v.play();if(pp&&pp.catch)pp.catch(function(e){console.log('MHVID play-rejected '+e);});}catch(e){}"
                 + "setTimeout(function(){if(v.readyState<3)console.log('MHVID slow rs='+v.readyState+' ns='+v.networkState+' paused='+v.paused);},12000);}"
                 + "else if(v.paused){try{v.play();}catch(e){}}}"
@@ -4485,7 +4510,7 @@ public class MainActivity extends Activity {
                 + "ct.setAttribute('data-mh','1');}"
                 + "function ap(){var s=document.getElementById('mh-style');"
                 + "if(!s){s=document.createElement('style');s.id='mh-style';(document.head||document.body).appendChild(s);}"
-                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();vid();}"
+                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();vid();img();dim();}"
                 + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);"
                 + "if(!window.__mhiv2)window.__mhiv2=setInterval(fix,500);"
                 + "if(!window.__mhmo&&window.MutationObserver){window.__mhmo=new MutationObserver(function(){"
@@ -4776,29 +4801,194 @@ public class MainActivity extends Activity {
                 || k.equals("notice") || k.equals("upd_checked");
     }
 
+    private JSONObject settingsJson(boolean profile) throws Exception {
+        JSONObject o = new JSONObject();
+        for (Map.Entry<String, ?> e : prefs.getAll().entrySet()) {
+            Object v = e.getValue();
+            String k = e.getKey();
+            if (skipKey(k)) continue;
+            if (profile && (k.equals("profiles") || k.equals("bg_pexels") || k.equals("bg_pixabay")
+                    || k.equals("bg_vurl") || k.equals("bg_last") || k.equals("bg_slot") || k.equals("bg_credit"))) continue;
+            if (v instanceof String || v instanceof Integer || v instanceof Long || v instanceof Boolean) o.put(k, v);
+        }
+        return o;
+    }
+
     private void backupSettings() {
         try {
-            JSONObject o = new JSONObject();
-            for (Map.Entry<String, ?> e : prefs.getAll().entrySet()) {
-                Object v = e.getValue();
-                if (skipKey(e.getKey())) continue;
-                if (v instanceof String || v instanceof Integer || v instanceof Long
-                        || v instanceof Boolean) {
-                    o.put(e.getKey(), v);
-                }
-            }
             File f = backupFile();
             FileOutputStream out = new FileOutputStream(f);
-            out.write(o.toString(2).getBytes("UTF-8"));
+            out.write(settingsJson(false).toString(2).getBytes("UTF-8"));
             out.close();
             dialog("تم النسخ الاحتياطي").setMessage("المفضلة والتصنيفات والترتيب والإعدادات حُفظت في:\n\n"
                     + f.getAbsolutePath()
-                    + "\n\nلنقلها لجهاز آخر:\nadb pull " + f.getAbsolutePath())
+                    + "\n\nلنقلها لجهاز آخر:\nadb pull " + f.getAbsolutePath()
+                    + "\n\nأو أرسلها بالبريد من «النسخ الاحتياطي وملفات التعريف».")
                     .setPositiveButton("حسناً", null).show();
         } catch (Exception e) {
             AppLog.error("BACKUP", "backup failed", e);
             toast("فشل النسخ الاحتياطي");
         }
+    }
+
+    /** Silent daily backup so the settings can always be restored. */
+    private void autoBackup() {
+        if (!prefs.getBoolean("auto_backup", true)) return;
+        try {
+            FileOutputStream out = new FileOutputStream(backupFile());
+            out.write(settingsJson(false).toString(2).getBytes("UTF-8"));
+            out.close();
+        } catch (Exception e) {
+            AppLog.error("BACKUP", "auto backup failed", e);
+        }
+    }
+
+    private void applyJson(JSONObject o, boolean profile) throws Exception {
+        SharedPreferences.Editor ed = prefs.edit();
+        Iterator<String> it = o.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (skipKey(k) || (profile && k.equals("profiles"))) continue;
+            Object v = o.get(k);
+            if (v instanceof String) ed.putString(k, (String) v);
+            else if (v instanceof Boolean) ed.putBoolean(k, (Boolean) v);
+            else if (v instanceof Integer) ed.putInt(k, (Integer) v);
+            else if (v instanceof Long) ed.putLong(k, (Long) v);
+        }
+        if (profile) ed.putLong("bg_last", 0);
+        ed.apply();
+    }
+
+    // ---- profiles ("Ramadan", "Friday"…): built-in presets + the user's saved snapshots
+
+    private static final String[] PROFILE_NAMES = {"🌙 رمضان — خلفيات إسلامية وتغيير كل نصف ساعة",
+            "🕌 الجمعة — صور المساجد وتعتيم خفيف", "🌌 ليلي هادئ — تعتيم عالٍ ولون أزرق",
+            "🧼 نظيف — خلفية Mawaqit الأصلية بلا صور"};
+
+    private JSONObject builtinProfile(int i) throws Exception {
+        JSONObject o = new JSONObject();
+        boolean pix = prefs.getString("bg_pixabay", "").length() > 8, pex = prefs.getString("bg_pexels", "").length() > 8;
+        int isl = 8 | (pix ? 16 : 0) | (pex ? 32 : 0);
+        if (i == 0) {
+            o.put("bg_type", 0).put("bg_src", isl).put("bg_mode", 0).put("bg_every", 30).put("bg_unit", 0)
+                    .put("bg_fade", 3).put("bg_dim", 40).put("w_tod", true).put("ui_accent", 0);
+        } else if (i == 1) {
+            o.put("bg_type", 0).put("bg_src", isl).put("bg_mode", 1).put("bg_hour", 11).put("bg_fade", 3)
+                    .put("bg_dim", 30).put("ui_accent", 2);
+        } else if (i == 2) {
+            o.put("bg_type", 0).put("bg_src", 1 | 2).put("bg_mode", 0).put("bg_every", 3).put("bg_unit", 1)
+                    .put("bg_fade", 4).put("bg_dim", 60).put("ui_accent", 3);
+        } else {
+            o.put("bg_src", 0).put("bg_vsrc", 0);
+        }
+        return o;
+    }
+
+    private void showBackupMenu() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("🎭  ملفات التعريف (رمضان، الجمعة…)");
+        a.add(this::showProfiles);
+        l.add("📤  نسخ احتياطي كامل إلى ملف الآن");
+        a.add(this::backupSettings);
+        l.add("📥  استعادة من الملف");
+        a.add(this::restoreSettings);
+        l.add("📧  إرسال النسخة الاحتياطية بالبريد");
+        a.add(() -> {
+            try {
+                sendMail(settingsJson(false).toString(2));
+            } catch (Exception e) {
+                toast("تعذّر");
+            }
+        });
+        l.add("📋  نسخ النسخة الاحتياطية (للصق)");
+        a.add(() -> {
+            try {
+                ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(
+                        android.content.ClipData.newPlainText("Mawaqit Home backup", settingsJson(false).toString(2)));
+                toast("تم النسخ ✓");
+            } catch (Exception e) {
+                toast("تعذّر النسخ");
+            }
+        });
+        l.add("📝  استعادة من نص ملصوق");
+        a.add(() -> promptText("الصق نص النسخة الاحتياطية", "{ … }", "", v -> {
+            try {
+                applyJson(new JSONObject(v.trim()), false);
+                toast("تمت الاستعادة");
+                recreate();
+            } catch (Exception e) {
+                toast("النص غير صالح");
+            }
+        }));
+        l.add("🕒  نسخ احتياطي تلقائي يومي:  " + onOff(prefs.getBoolean("auto_backup", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("auto_backup", !prefs.getBoolean("auto_backup", true)).apply();
+            showBackupMenu();
+        });
+        menu("النسخ الاحتياطي وملفات التعريف", l, a, this::showLauncherSettings);
+    }
+
+    private void showProfiles() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        for (int i = 0; i < PROFILE_NAMES.length; i++) {
+            final int idx = i;
+            l.add(PROFILE_NAMES[i]);
+            a.add(() -> dialog(PROFILE_NAMES[idx]).setMessage("يغيّر إعدادات الخلفية والألوان فقط، وبقية إعداداتك تبقى كما هي. "
+                    + "يمكنك الرجوع بحفظ إعداداتك الحالية كملف قبل ذلك.")
+                    .setPositiveButton("تطبيق", (d, w) -> {
+                        try {
+                            applyJson(builtinProfile(idx), true);
+                            toast("طُبّق الملف");
+                            recreate();
+                        } catch (Exception e) {
+                            toast("تعذّر");
+                        }
+                    }).setNegativeButton("رجوع", (d, w) -> showProfiles()).show());
+        }
+        JSONObject saved;
+        try {
+            saved = new JSONObject(prefs.getString("profiles", "{}"));
+        } catch (Exception e) {
+            saved = new JSONObject();
+        }
+        final JSONObject sv = saved;
+        Iterator<String> it = sv.keys();
+        while (it.hasNext()) {
+            final String nm = it.next();
+            l.add("💾  " + nm);
+            a.add(() -> dialog(nm).setMessage("ملف محفوظ من إعداداتك: كل الإعدادات التي كانت وقت الحفظ.")
+                    .setPositiveButton("تطبيق", (d, w) -> {
+                        try {
+                            applyJson(sv.getJSONObject(nm), true);
+                            toast("طُبّق الملف");
+                            recreate();
+                        } catch (Exception e) {
+                            toast("تعذّر");
+                        }
+                    })
+                    .setNeutralButton("حذف", (d, w) -> {
+                        sv.remove(nm);
+                        prefs.edit().putString("profiles", sv.toString()).apply();
+                        showProfiles();
+                    })
+                    .setNegativeButton("رجوع", (d, w) -> showProfiles()).show());
+        }
+        l.add("➕  حفظ إعداداتي الحالية كملف جديد");
+        a.add(() -> promptText("اسم الملف", "مثلاً: رمضان بيتي", "", v -> {
+            String nm = v.trim();
+            if (nm.isEmpty()) return;
+            try {
+                sv.put(nm, settingsJson(true));
+                prefs.edit().putString("profiles", sv.toString()).apply();
+                toast("تم الحفظ ✓");
+            } catch (Exception e) {
+                toast("تعذّر الحفظ");
+            }
+            showProfiles();
+        }));
+        menu("ملفات التعريف", l, a, this::showBackupMenu);
     }
 
     private void restoreSettings() {
@@ -4814,19 +5004,7 @@ public class MainActivity extends Activity {
             FileInputStream in = new FileInputStream(f);
             String s = readAll(in);
             in.close();
-            JSONObject o = new JSONObject(s);
-            SharedPreferences.Editor ed = prefs.edit();
-            Iterator<String> it = o.keys();
-            while (it.hasNext()) {
-                String k = it.next();
-                if (skipKey(k)) continue;
-                Object v = o.get(k);
-                if (v instanceof String) ed.putString(k, (String) v);
-                else if (v instanceof Boolean) ed.putBoolean(k, (Boolean) v);
-                else if (v instanceof Integer) ed.putInt(k, (Integer) v);
-                else if (v instanceof Long) ed.putLong(k, (Long) v);
-            }
-            ed.apply();
+            applyJson(new JSONObject(s), false);
             toast("تمت الاستعادة");
             recreate();
         } catch (Exception e) {
