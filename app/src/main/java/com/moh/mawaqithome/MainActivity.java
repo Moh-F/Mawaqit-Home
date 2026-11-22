@@ -1178,34 +1178,30 @@ public class MainActivity extends Activity {
         for (int i = 0; i < 3; i++) {
             LinearLayout row = new LinearLayout(this);
             dayView[i] = row;
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout main = new LinearLayout(this);
+            main.setOrientation(LinearLayout.HORIZONTAL);
 
             wDay[i] = text(12, true);
             wDay[i].setTextDirection(View.TEXT_DIRECTION_RTL);
-            wDay[i].setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             wIcon[i] = text(26, false);
             wIcon[i].setGravity(Gravity.CENTER);
             wIcon[i].setText("—");
-
-            LinearLayout tc = new LinearLayout(this);
-            tc.setOrientation(LinearLayout.VERTICAL);
             wTemp[i] = text(15, true);
             wTemp[i].setGravity(Gravity.CENTER);
             wTemp[i].setText("--°");
             wSub[i] = text(10, false);
             wSub[i].setTextColor(0xE6FFFFFF);
-            wSub[i].setGravity(Gravity.CENTER);
             wSub[i].setTextDirection(View.TEXT_DIRECTION_RTL);
             wSub[i].setText("💧 —");
-            tc.addView(wTemp[i], new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            tc.addView(wSub[i], new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            row.addView(wDay[i]);
-            row.addView(wIcon[i]);
-            row.addView(tc);
+            main.addView(wDay[i]);
+            main.addView(wIcon[i]);
+            main.addView(wTemp[i]);
+            row.addView(main, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            row.addView(wSub[i], new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             daysBox.addView(row);
         }
 
@@ -1238,7 +1234,7 @@ public class MainActivity extends Activity {
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
         final int gap = wsc(prefs.getInt("w_gap", 4));
         if (!cols) {                                   // measure real text so columns hug their content
-            int dW = 0, iW = 0, tW = 0;
+            int dW = 0, iW = 0, tW = 0, subW = 0;
             for (int i = 0; i < 3; i++) {
                 setPx(wDay[i], 12);
                 setPx(wTemp[i], 15);
@@ -1247,14 +1243,14 @@ public class MainActivity extends Activity {
                 if (i >= Math.max(1, Math.min(3, prefs.getInt("w_days", 3)))) continue;
                 dW = Math.max(dW, (int) Math.ceil(Layout.getDesiredWidth(wDay[i].getText(), wDay[i].getPaint())));
                 iW = Math.max(iW, (int) Math.ceil(Layout.getDesiredWidth(wIcon[i].getText(), wIcon[i].getPaint())));
-                int t = (int) Math.ceil(Layout.getDesiredWidth(wTemp[i].getText(), wTemp[i].getPaint()));
-                int sub = wSub[i].getVisibility() == View.GONE ? 0 : Math.min(wsc(200),
-                        (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint())));
-                tW = Math.max(tW, Math.max(t, sub));
+                tW = Math.max(tW, (int) Math.ceil(Layout.getDesiredWidth(wTemp[i].getText(), wTemp[i].getPaint())));
+                if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(wsc(230),
+                        (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint()))));
             }
+            wRowSub = subW;
             wRowDay = dW > 0 ? dW + wsc(4) : wsc(80);
             wRowIcon = iW > 0 ? iW + wsc(4) : wsc(34);
-            wRowTemp = tW > 0 ? tW + wsc(4) : wsc(128);
+            wRowTemp = tW > 0 ? tW + wsc(4) : wsc(80);
         }
         final int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
         weatherCity.setVisibility(prefs.getBoolean("w_city", true) ? View.VISIBLE : View.GONE);
@@ -1266,45 +1262,48 @@ public class MainActivity extends Activity {
         daysBox.setOrientation(cols ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         for (int i = 0; i < 3; i++) {
             LinearLayout row = dayView[i];
+            LinearLayout main = (LinearLayout) row.getChildAt(0);
             row.setVisibility(i < nd ? View.VISIBLE : View.GONE);
-            View tc = (View) wTemp[i].getParent();
-            row.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
-            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.BOTTOM);
-            row.setPadding(cols ? wsc(6) : 0, wsc(2), cols ? wsc(6) : 0, wsc(2));
-            row.setMinimumHeight(cols ? 0 : wsc(46));
-            wSub[i].setSingleLine(false);
-            wSub[i].setMaxLines(4);
-            wTemp[i].setGravity(Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM);
-            wSub[i].setGravity(Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.LEFT);
+            row.setPadding(cols ? wsc(6) : 0, wsc(3), cols ? wsc(6) : 0, wsc(3));
+            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
+                    ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            main.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+            main.setBaselineAligned(true);                 // day, icon and temperature share one baseline
+            main.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.NO_GRAVITY);
+            setPx(wDay[i], 12);
+            setPx(wIcon[i], 26);
+            setPx(wTemp[i], 15);
+            setPx(wSub[i], 10);
+            int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
+            wDay[i].setGravity(cols ? Gravity.CENTER : (al == 1 ? Gravity.CENTER
+                    : al == 2 ? Gravity.LEFT : Gravity.RIGHT));
+            wTemp[i].setGravity(Gravity.CENTER);
             wDay[i].setIncludeFontPadding(false);
             wIcon[i].setIncludeFontPadding(false);
             wTemp[i].setIncludeFontPadding(false);
             wSub[i].setIncludeFontPadding(false);
-            if (tc instanceof LinearLayout) ((LinearLayout) tc).setGravity(Gravity.BOTTOM);
-            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
-                    ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            setPx(wDay[i], 12);
-            int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
-            wDay[i].setGravity(cols ? Gravity.CENTER : (al == 1 ? Gravity.CENTER
-                    : al == 2 ? Gravity.LEFT : Gravity.RIGHT) | (cols ? Gravity.CENTER_VERTICAL : Gravity.BOTTOM));
-            wDay[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
+            wSub[i].setSingleLine(false);
+            wSub[i].setMaxLines(3);
+            wSub[i].setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams dl = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : mlp(wRowDay, 0, gap));
-            setPx(wIcon[i], 26);
-            wIcon[i].setLayoutParams(cols ? new LinearLayout.LayoutParams(
+                    : mlp(wRowDay, 0, gap);
+            LinearLayout.LayoutParams il = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : mlp(wRowIcon, 0, gap));
-            setPx(wTemp[i], 15);
-            setPx(wSub[i], 10);
-            tc.setLayoutParams(cols ? new LinearLayout.LayoutParams(
+                    : mlp(wRowIcon, 0, gap);
+            LinearLayout.LayoutParams tl = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : new LinearLayout.LayoutParams(wRowTemp, ViewGroup.LayoutParams.WRAP_CONTENT));
-            if (!cols) {                                  // every column sits on the same bottom line
-                ((LinearLayout.LayoutParams) wDay[i].getLayoutParams()).gravity = Gravity.BOTTOM;
-                ((LinearLayout.LayoutParams) wIcon[i].getLayoutParams()).gravity = Gravity.BOTTOM;
-                ((LinearLayout.LayoutParams) tc.getLayoutParams()).gravity = Gravity.BOTTOM;
-            }
+                    : new LinearLayout.LayoutParams(wRowTemp, ViewGroup.LayoutParams.WRAP_CONTENT);
+            wDay[i].setLayoutParams(dl);
+            wIcon[i].setLayoutParams(il);
+            wTemp[i].setLayoutParams(tl);
+            LinearLayout.LayoutParams sl2 = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            sl2.topMargin = wsc(1);
+            wSub[i].setLayoutParams(sl2);
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -1320,11 +1319,12 @@ public class MainActivity extends Activity {
     private int weatherCardWidth() {
         int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
         if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + nd * 112);
-        return wsc(14 + 14) + (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
-                + (wRowTemp > 0 ? wRowTemp : wsc(128)) + 2 * wsc(prefs.getInt("w_gap", 4));
+        int mainW = (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
+                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * wsc(prefs.getInt("w_gap", 4));
+        return wsc(14 + 14) + Math.max(mainW, wRowSub + wsc(4));
     }
 
-    private int wRowDay, wRowIcon, wRowTemp;
+    private int wRowDay, wRowIcon, wRowTemp, wRowSub;
 
     private LinearLayout.LayoutParams mlp(int w, int l, int r) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1845,6 +1845,15 @@ public class MainActivity extends Activity {
                         this::showBgSettings, this::showBgSettings);
             }
         }, this::showBgSettings));
+        if (vid) {
+            l.add("📺  طريقة عرض الفيديو:  " + (prefs.getInt("bg_vmode", 1) == 1 ? "توافق (عبر لوحة رسم)" : "مباشر"));
+            a.add(() -> choice("طريقة عرض الفيديو", new String[]{"مباشر (أسرع وأخف)",
+                    "توافق عبر لوحة رسم (إن لم يظهر الفيديو المباشر)"}, prefs.getInt("bg_vmode", 1), i -> {
+                prefs.edit().putInt("bg_vmode", i).apply();
+                applyPageCss();
+                showBgSettings();
+            }, this::showBgSettings));
+        }
         l.add("🎞  مدة الانتقال الناعم بين الخلفيات:  " + prefs.getInt("bg_fade", 2) + " ث");
         a.add(() -> numberDialog("مدة الانتقال الناعم (ثوانٍ، 0 = فوري)", "bg_fade", 2, 0, 10, " ث", "فوري", null,
                 this::applyPageCss, this::showBgSettings));
@@ -4518,16 +4527,25 @@ public class MainActivity extends Activity {
                 + "window.__mhai=nx;window.__mhcur=u;"
                 + "setTimeout(function(){if(O){O.style.transition='none';O.style.opacity=0;O.style.zIndex=-4;}},window.__mhfade*1000+100);};"
                 + "im.onerror=function(){window.__mhpend='';};im.src=u;}"
-                + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid');"
-                + "if(!u){if(v)v.remove();return;}"
+                + ";window.__mhvm=" + prefs.getInt("bg_vmode", 1)
+                + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid'),cv=document.getElementById('mh-cv');"
+                + "if(!u){if(v)v.remove();if(cv)cv.remove();if(window.__mhcvt){clearInterval(window.__mhcvt);window.__mhcvt=0;}return;}"
                 + "if(!document.getElementById('mh-ref')){var mt=document.createElement('meta');mt.id='mh-ref';mt.name='referrer';mt.content='no-referrer';document.head.appendChild(mt);}"
                 + "if(!v){v=document.createElement('video');v.id='mh-vid';v.addEventListener('error',function(){console.log('MHVID error code='+(v.error?v.error.code:'?')+' '+v.getAttribute('data-u'));});"
-                + "v.addEventListener('playing',function(){console.log('MHVID playing '+v.videoWidth+'x'+v.videoHeight);});"
+                + "v.addEventListener('playing',function(){if(!window.__mhlogp){window.__mhlogp=1;console.log('MHVID playing '+v.videoWidth+'x'+v.videoHeight);}});"
                 + "v.addEventListener('stalled',function(){console.log('MHVID stalled rs='+v.readyState);});"
-                + "v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;"
-                + "v.setAttribute('playsinline','');v.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;object-fit:cover;z-index:-2;background:#000';"
+                + "v.muted=true;v.defaultMuted=true;v.autoplay=true;v.loop=true;v.setAttribute('playsinline','');"
                 + "document.body.appendChild(v);}"
-                + "if(v.getAttribute('data-u')!==u){v.setAttribute('data-u',u);v.src=u;console.log('MHVID load '+u);var pp;try{pp=v.play();if(pp&&pp.catch)pp.catch(function(e){console.log('MHVID play-rejected '+e);});}catch(e){}"
+                + "v.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;object-fit:cover;background:#000;transform:translateZ(0);z-index:'+(window.__mhvm===1?-6:-2);"
+                + "if(window.__mhvm===1){if(!cv){cv=document.createElement('canvas');cv.id='mh-cv';cv.width=960;cv.height=540;"
+                + "cv.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-2;background:#000';document.body.appendChild(cv);}"
+                + "if(!window.__mhcvt){window.__mhcvt=setInterval(function(){var vv=document.getElementById('mh-vid'),c=document.getElementById('mh-cv');"
+                + "if(!vv||!c||vv.readyState<2||!vv.videoWidth)return;var x=c.getContext('2d'),sc=Math.max(c.width/vv.videoWidth,c.height/vv.videoHeight),"
+                + "w=vv.videoWidth*sc,h=vv.videoHeight*sc;x.drawImage(vv,(c.width-w)/2,(c.height-h)/2,w,h);"
+                + "if(!window.__mhlum){window.__mhlum=1;setTimeout(function(){try{var d=x.getImageData(0,0,c.width,c.height).data,t=0,n=0;"
+                + "for(var i=0;i<d.length;i+=4096){t+=d[i]+d[i+1]+d[i+2];n+=3;}console.log('MHVID canvas avg-brightness='+Math.round(t/n));}catch(e){console.log('MHVID canvas unreadable '+e);}},3000);}},45);}}"
+                + "else{if(cv)cv.remove();if(window.__mhcvt){clearInterval(window.__mhcvt);window.__mhcvt=0;}}"
+                + "if(v.getAttribute('data-u')!==u){window.__mhlogp=0;window.__mhlum=0;v.setAttribute('data-u',u);v.src=u;console.log('MHVID load '+u+' mode='+window.__mhvm);var pp;try{pp=v.play();if(pp&&pp.catch)pp.catch(function(e){console.log('MHVID play-rejected '+e);});}catch(e){}"
                 + "setTimeout(function(){if(v.readyState<3)console.log('MHVID slow rs='+v.readyState+' ns='+v.networkState+' paused='+v.paused);},12000);}"
                 + "else if(v.paused){try{v.play();}catch(e){}}}"
                 + "window.__mhcss=" + JSONObject.quote(css.toString()) + ";window.__mhfont="
