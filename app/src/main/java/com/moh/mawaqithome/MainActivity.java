@@ -645,6 +645,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         resumed = false;
+        try {
+            if (videoMp != null && videoMp.isPlaying()) videoMp.pause();
+        } catch (Exception ignored) {
+        }
         webView.onPause();
         webView.pauseTimers();
         super.onPause();
@@ -658,6 +662,8 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
         handler.removeCallbacksAndMessages(null);
+        stopNativeVideo();
+        stopLinkServer();
         shiftLayer.removeView(webView);
         webView.destroy();
         AppLog.info("APP", "destroyed");
@@ -1772,12 +1778,8 @@ public class MainActivity extends Activity {
                         .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
             });
             final String links = prefs.getString("bg_links", "");
-            l.add("🔗  روابطي الخاصة:  " + Backgrounds.links(links).size() + " رابط");
-            a.add(() -> promptText("روابط صور مباشرة (https) — افصل بينها بمسافة", "https://…/image.jpg", links,
-                    v -> {
-                        prefs.edit().putString("bg_links", v).apply();
-                        showBgSettings();
-                    }));
+            l.add("🔗  روابطي الخاصة:  " + Backgrounds.links(links).size() + " رابط  — أضفها من الجوال");
+            a.add(this::showLinkInput);
         } else {
             final int vs = bgVSrc();
             StringBuilder sn = new StringBuilder();
@@ -1814,12 +1816,8 @@ public class MainActivity extends Activity {
                 showBgSettings();
             }));
             final String vl = prefs.getString("bg_vlinks", "");
-            l.add("🔗  روابط فيديو خاصة:  " + Backgrounds.links(vl).size() + " رابط");
-            a.add(() -> promptText("روابط فيديو مباشرة (https) — افصل بينها بمسافة", "https://…/clip.mp4", vl,
-                    v -> {
-                        prefs.edit().putString("bg_vlinks", v).apply();
-                        showBgSettings();
-                    }));
+            l.add("🔗  روابط فيديو خاصة:  " + Backgrounds.links(vl).size() + " رابط  — أضفها من الجوال");
+            a.add(this::showLinkInput);
             String tq = prefs.getString("bg_topic", "nature landscape");
             int ti = Math.max(0, Arrays.asList(TOPIC_Q).indexOf(tq));
             l.add("🎬  موضوع الفيديو:  " + TOPIC_NAMES[ti]);
@@ -1846,9 +1844,9 @@ public class MainActivity extends Activity {
             }
         }, this::showBgSettings));
         if (vid) {
-            l.add("📺  طريقة عرض الفيديو:  " + (prefs.getInt("bg_vmode", 1) == 1 ? "توافق (عبر لوحة رسم)" : "مباشر"));
-            a.add(() -> choice("طريقة عرض الفيديو", new String[]{"مباشر (أسرع وأخف)",
-                    "توافق عبر لوحة رسم (إن لم يظهر الفيديو المباشر)"}, prefs.getInt("bg_vmode", 1), i -> {
+            l.add("📺  طريقة عرض الفيديو:  " + (prefs.getInt("bg_vmode", 2) == 2 ? "أصلي (مشغّل النظام)" : prefs.getInt("bg_vmode", 2) == 1 ? "لوحة رسم" : "مباشر"));
+            a.add(() -> choice("طريقة عرض الفيديو", new String[]{"مباشر داخل الصفحة",
+                    "لوحة رسم داخل الصفحة", "أصلي — مشغّل فيديو النظام (الأفضل)"}, prefs.getInt("bg_vmode", 2), i -> {
                 prefs.edit().putInt("bg_vmode", i).apply();
                 applyPageCss();
                 showBgSettings();
@@ -4504,15 +4502,18 @@ public class MainActivity extends Activity {
             css.append("}");
         }
         if (pf > 0) css.append(".currentTime>div:not(#mh-ck){display:none!important}");
-        final boolean vidOn = bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty();
+        final boolean natOn = nativeVideoWanted();
+        final boolean vidOn = bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty() && !natOn;
         final boolean imgOn = !bgVideo() && bgSources() != 0 && bgFile().exists();
         if (vidOn || imgOn) css.append("html{background:#000!important}body{background:none!important}");
+        if (natOn) css.append("html,body{background:transparent!important}");
+        applyNativeVideo();
         String js = "(function(){window.__mhvid=" + JSONObject.quote(vidOn ? prefs.getString("bg_vurl", "") : "")
                 + ";window.__mhdim=" + (Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f)
                 + ";window.__mhimg=" + JSONObject.quote(imgOn ? "/__mhbg/bg_" + prefs.getInt("bg_slot", 0)
                         + ".jpg?v=" + prefs.getLong("bg_last", 0) : "")
                 + ";window.__mhfade=" + Math.max(0, Math.min(10, prefs.getInt("bg_fade", 2)))
-                + ";function dim(){var any=window.__mhvid||window.__mhimg,d=document.getElementById('mh-dim');"
+                + ";function dim(){var any=window.__mhvid||window.__mhimg||window.__mhnat,d=document.getElementById('mh-dim');"
                 + "if(!any){if(d)d.remove();return;}"
                 + "if(!d){d=document.createElement('div');d.id='mh-dim';d.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-1;pointer-events:none';document.body.appendChild(d);}"
                 + "d.style.background='rgba(0,0,0,'+window.__mhdim+')';}"
@@ -4527,7 +4528,8 @@ public class MainActivity extends Activity {
                 + "window.__mhai=nx;window.__mhcur=u;"
                 + "setTimeout(function(){if(O){O.style.transition='none';O.style.opacity=0;O.style.zIndex=-4;}},window.__mhfade*1000+100);};"
                 + "im.onerror=function(){window.__mhpend='';};im.src=u;}"
-                + ";window.__mhvm=" + prefs.getInt("bg_vmode", 1)
+                + ";window.__mhnat=" + (natOn ? "1" : "0")
+                + ";window.__mhvm=" + prefs.getInt("bg_vmode", 2)
                 + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid'),cv=document.getElementById('mh-cv');"
                 + "if(!u){if(v)v.remove();if(cv)cv.remove();if(window.__mhcvt){clearInterval(window.__mhcvt);window.__mhcvt=0;}return;}"
                 + "if(!document.getElementById('mh-ref')){var mt=document.createElement('meta');mt.id='mh-ref';mt.name='referrer';mt.content='no-referrer';document.head.appendChild(mt);}"
@@ -4786,6 +4788,277 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ---- add own picture / video links from a phone (QR code -> small page on the local network)
+
+    private ServerSocket linkSrv;
+
+    private void stopLinkServer() {
+        try {
+            if (linkSrv != null) linkSrv.close();
+        } catch (Exception ignored) {
+        }
+        linkSrv = null;
+    }
+
+    private static String urlDecode(String v) {
+        try {
+            return java.net.URLDecoder.decode(v, "UTF-8");
+        } catch (Exception e) {
+            return v;
+        }
+    }
+
+    private static String esc(String v) {
+        return v.replace("&", "&amp;").replace("<", "&lt;");
+    }
+
+    private void showLinkInput() {
+        final String ip = localIp();
+        if (ip == null) {
+            toast("لا يوجد اتصال شبكة محلي — أدخل الروابط يدوياً");
+            promptText("روابط صور (https) مفصولة بمسافة", "https://…/image.jpg", prefs.getString("bg_links", ""),
+                    v -> {
+                        prefs.edit().putString("bg_links", v).apply();
+                        showBgSettings();
+                    });
+            return;
+        }
+        stopLinkServer();
+        final String token = Long.toString(Math.abs(new java.security.SecureRandom().nextLong()), 36).substring(0, 6);
+        final String addr = "http://" + ip + ":8766/" + token;
+        try {
+            final ServerSocket ss = new ServerSocket(8766);
+            linkSrv = ss;
+            new Thread(() -> {
+                while (!ss.isClosed()) {
+                    try {
+                        Socket c = ss.accept();
+                        try {
+                            c.setSoTimeout(8000);
+                            InputStream in = c.getInputStream();
+                            ByteArrayOutputStream hd = new ByteArrayOutputStream();
+                            int b, state = 0;
+                            while (hd.size() < 16384 && (b = in.read()) >= 0) {      // headers end at \r\n\r\n
+                                hd.write(b);
+                                state = (b == '\r' && (state == 0 || state == 2)) ? state + 1
+                                        : (b == '\n' && (state == 1 || state == 3)) ? state + 1 : 0;
+                                if (state == 4) break;
+                            }
+                            String head = hd.toString("UTF-8");
+                            String first = head.split("\r\n")[0];
+                            boolean ok = first.contains("/" + token);
+                            String page;
+                            if (ok && first.startsWith("POST")) {
+                                int len = 0;
+                                for (String h : head.split("\r\n"))
+                                    if (h.toLowerCase().startsWith("content-length:"))
+                                        len = Integer.parseInt(h.substring(15).trim());
+                                byte[] body = new byte[Math.min(len, 200_000)];
+                                int got = 0;
+                                while (got < body.length) {
+                                    int n = in.read(body, got, body.length - got);
+                                    if (n < 0) break;
+                                    got += n;
+                                }
+                                String imgs = "", vids = "";
+                                for (String kv : new String(body, 0, got, "UTF-8").split("&")) {
+                                    int eq = kv.indexOf('=');
+                                    if (eq < 0) continue;
+                                    if (kv.startsWith("i=")) imgs = urlDecode(kv.substring(eq + 1));
+                                    if (kv.startsWith("v=")) vids = urlDecode(kv.substring(eq + 1));
+                                }
+                                final String fi = TextUtils.join(" ", Backgrounds.links(imgs));
+                                final String fv = TextUtils.join(" ", Backgrounds.links(vids));
+                                runOnUiThread(() -> {
+                                    SharedPreferences.Editor ed = prefs.edit().putString("bg_links", fi)
+                                            .putString("bg_vlinks", fv);
+                                    if (!fi.isEmpty()) ed.putInt("bg_src", prefs.getInt("bg_src", 0) | Backgrounds.OWN);
+                                    if (!fv.isEmpty()) ed.putInt("bg_vsrc", prefs.getInt("bg_vsrc", 0) | Backgrounds.V_OWN);
+                                    ed.apply();
+                                    toast("وصلت الروابط من الجوال ✓");
+                                    if (bgEnabled()) bgFetch(false);
+                                });
+                                page = "<h2>✓ تم الحفظ (" + Backgrounds.links(imgs).size() + " صورة، "
+                                        + Backgrounds.links(vids).size() + " فيديو)</h2>";
+                            } else if (ok) {
+                                page = "<h2>روابط الخلفية الخاصة</h2><form method=post action='/" + token + "'>"
+                                        + "<p>روابط الصور (رابط مباشر https، سطر لكل رابط):</p>"
+                                        + "<textarea name=i rows=6 style='width:100%;direction:ltr'>"
+                                        + esc(prefs.getString("bg_links", "").replace(" ", "\n")) + "</textarea>"
+                                        + "<p>روابط الفيديو (mp4 / webm):</p>"
+                                        + "<textarea name=v rows=6 style='width:100%;direction:ltr'>"
+                                        + esc(prefs.getString("bg_vlinks", "").replace(" ", "\n")) + "</textarea>"
+                                        + "<p><button style='font-size:22px;padding:12px 28px'>💾 حفظ</button></p></form>";
+                            } else {
+                                page = "not found";
+                            }
+                            byte[] out = ("<!doctype html><html dir=rtl><meta charset=utf-8>"
+                                    + "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                                    + "<body style='font-family:sans-serif;margin:14px'>" + page).getBytes("UTF-8");
+                            OutputStream o = c.getOutputStream();
+                            o.write(("HTTP/1.1 " + (ok ? "200 OK" : "404 Not Found")
+                                    + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + out.length
+                                    + "\r\nConnection: close\r\n\r\n").getBytes("UTF-8"));
+                            o.write(out);
+                            o.flush();
+                        } finally {
+                            c.close();
+                        }
+                    } catch (Exception e) {
+                        if (ss.isClosed()) break;
+                    }
+                }
+            }, "linksrv").start();
+            handler.postDelayed(this::stopLinkServer, 15L * 60 * 1000);
+        } catch (Exception e) {
+            AppLog.error("LINKSRV", "start failed", e);
+            toast("تعذّر تشغيل خادم الروابط");
+            return;
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        ImageView qr = new ImageView(this);
+        try {
+            com.google.zxing.common.BitMatrix m = new com.google.zxing.qrcode.QRCodeWriter().encode(addr,
+                    com.google.zxing.BarcodeFormat.QR_CODE, 400, 400);
+            Bitmap bm = Bitmap.createBitmap(400, 400, Bitmap.Config.RGB_565);
+            for (int x = 0; x < 400; x++)
+                for (int y = 0; y < 400; y++) bm.setPixel(x, y, m.get(x, y) ? Color.BLACK : Color.WHITE);
+            qr.setImageBitmap(bm);
+        } catch (Exception e) {
+            AppLog.error("LINKSRV", "qr failed", e);
+        }
+        box.addView(qr, new LinearLayout.LayoutParams(dp(210), dp(210)));
+        TextView t = text(13, false);
+        t.setText("1) على الجوال (نفس الواي فاي) امسح الرمز أو افتح:\n" + addr
+                + "\n2) الصق الروابط واضغط «حفظ» — تصل هنا فوراً.");
+        t.setGravity(Gravity.CENTER);
+        box.addView(t);
+        dialog("إضافة روابط من الجوال").setView(box)
+                .setPositiveButton("تم", (d, w) -> {
+                    stopLinkServer();
+                    showBgSettings();
+                })
+                .setNeutralButton("إدخال يدوي", (d, w) -> {
+                    stopLinkServer();
+                    promptText("روابط صور (https) مفصولة بمسافة", "https://…/image.jpg",
+                            prefs.getString("bg_links", ""), v -> {
+                                prefs.edit().putString("bg_links", v).apply();
+                                showBgSettings();
+                            });
+                }).show();
+    }
+
+    // ---- native video background (MediaPlayer on a TextureView behind a transparent WebView)
+
+    private android.view.TextureView videoTv;
+    private android.media.MediaPlayer videoMp;
+    private String videoPlaying = "";
+    private android.graphics.SurfaceTexture videoSt;
+
+    private boolean nativeVideoWanted() {
+        return bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty()
+                && prefs.getInt("bg_vmode", 2) == 2;
+    }
+
+    private void ensureVideoView() {
+        if (videoTv != null) return;
+        videoTv = new android.view.TextureView(this);
+        videoTv.setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+            @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
+                videoSt = st;
+                if (nativeVideoWanted()) playNativeVideo(prefs.getString("bg_vurl", ""));
+            }
+
+            @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
+            }
+
+            @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) {
+                stopNativeVideo();
+                videoSt = null;
+                return true;
+            }
+
+            @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) {
+            }
+        });
+        shiftLayer.addView(videoTv, 0, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    /** Called whenever the background settings change. */
+    private void applyNativeVideo() {
+        boolean want = nativeVideoWanted();
+        webView.setBackgroundColor(want ? Color.TRANSPARENT : Color.BLACK);
+        if (!want) {
+            stopNativeVideo();
+            if (videoTv != null) videoTv.setVisibility(View.GONE);
+            return;
+        }
+        ensureVideoView();
+        videoTv.setVisibility(View.VISIBLE);
+        String u = prefs.getString("bg_vurl", "");
+        if (videoSt != null && !u.equals(videoPlaying)) playNativeVideo(u);
+    }
+
+    private void stopNativeVideo() {
+        try {
+            if (videoMp != null) {
+                videoMp.release();
+            }
+        } catch (Exception ignored) {
+        }
+        videoMp = null;
+        videoPlaying = "";
+    }
+
+    private void playNativeVideo(final String url) {
+        if (videoSt == null || url.isEmpty()) return;
+        stopNativeVideo();
+        videoPlaying = url;
+        try {
+            final android.media.MediaPlayer mp = new android.media.MediaPlayer();
+            videoMp = mp;
+            mp.setDataSource(url);
+            mp.setSurface(new android.view.Surface(videoSt));
+            mp.setLooping(true);
+            mp.setVolume(0f, 0f);
+            mp.setOnPreparedListener(m -> {
+                try {
+                    fitVideo(m.getVideoWidth(), m.getVideoHeight());
+                    m.start();
+                    AppLog.info("VIDEO", "native playing " + m.getVideoWidth() + "x" + m.getVideoHeight());
+                    videoErrors = 0;
+                } catch (Exception e) {
+                    AppLog.error("VIDEO", "native start failed", e);
+                }
+            });
+            mp.setOnVideoSizeChangedListener((m, w, h) -> fitVideo(w, h));
+            mp.setOnErrorListener((m, what, extra) -> {
+                AppLog.info("VIDEO", "native error what=" + what + " extra=" + extra + " " + url);
+                videoPlaying = "";
+                if (++videoErrors <= 4 && bgVideo()) handler.postDelayed(() -> bgFetch(false), 3000L);
+                return true;
+            });
+            mp.prepareAsync();
+            AppLog.info("VIDEO", "native load " + url);
+        } catch (Exception e) {
+            AppLog.error("VIDEO", "native load failed", e);
+            videoPlaying = "";
+        }
+    }
+
+    /** Scale-to-fill (crop) like CSS object-fit: cover. */
+    private void fitVideo(int vw, int vh) {
+        if (videoTv == null || vw <= 0 || vh <= 0) return;
+        int sw = Math.max(1, root.getWidth()), sh = Math.max(1, root.getHeight());
+        float s = Math.max(sw / (float) vw, sh / (float) vh);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(Math.round(vw * s), Math.round(vh * s),
+                Gravity.CENTER);
+        videoTv.setLayoutParams(lp);
+    }
+
     private void stopLogServer() {
         try {
             if (logSrv != null) logSrv.close();
@@ -4910,6 +5183,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static boolean profileExcluded(String k) {
+        return k.equals("profiles") || k.equals("bg_pexels") || k.equals("bg_pixabay") || k.equals("bg_vurl")
+                || k.equals("bg_last") || k.equals("bg_slot") || k.equals("bg_credit") || skipKey(k);
+    }
+
+    /** A saved profile is a full snapshot: settings changed since then (absent from it) go back to default. */
+    private void applyFullProfile(JSONObject o) throws Exception {
+        SharedPreferences.Editor ed = prefs.edit();
+        for (String k : new ArrayList<>(prefs.getAll().keySet())) {
+            if (!profileExcluded(k) && !o.has(k)) ed.remove(k);
+        }
+        ed.apply();
+        applyJson(o, true);
+    }
+
     private void applyJson(JSONObject o, boolean profile) throws Exception {
         SharedPreferences.Editor ed = prefs.edit();
         Iterator<String> it = o.keys();
@@ -5028,7 +5316,7 @@ public class MainActivity extends Activity {
             a.add(() -> dialog(nm).setMessage("ملف محفوظ من إعداداتك: كل الإعدادات التي كانت وقت الحفظ.")
                     .setPositiveButton("تطبيق", (d, w) -> {
                         try {
-                            applyJson(sv.getJSONObject(nm), true);
+                            applyFullProfile(sv.getJSONObject(nm));
                             toast("طُبّق الملف");
                             recreate();
                         } catch (Exception e) {
