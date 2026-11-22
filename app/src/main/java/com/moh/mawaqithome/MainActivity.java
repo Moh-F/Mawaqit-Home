@@ -2653,7 +2653,7 @@ public class MainActivity extends Activity {
         if (st == 0) return;
         final boolean circle = st == 2 || st == 7;
         final float r = circle ? iconPx / 2f : st == 8 ? dp(2) : iconPx * 0.22f;
-        int pad = (st == 6 || st == 7) ? 0 : Math.round(iconPx * (circle ? 0.16f : 0.12f));
+        int pad = (st == 6 || st == 7) ? 0 : Math.round(iconPx * (circle ? 0.10f : 0.06f));
         iv.setPadding(pad, pad, pad, pad);
         GradientDrawable g = new GradientDrawable();
         g.setCornerRadius(r);
@@ -4407,7 +4407,7 @@ public class MainActivity extends Activity {
                     .append("background-repeat:no-repeat!important}");
         }
         final boolean vidOn = bgVideo() && bgVSrc() != 0 && !prefs.getString("bg_vurl", "").isEmpty();
-        if (vidOn) css.append("html,body{background:#000!important}");
+        if (vidOn) css.append("html{background:#000!important}body{background:none!important}");
         String js = "(function(){window.__mhvid=" + JSONObject.quote(vidOn ? prefs.getString("bg_vurl", "") : "")
                 + ";window.__mhdim=" + (Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f)
                 + ";function vid(){var u=window.__mhvid||'',v=document.getElementById('mh-vid'),d=document.getElementById('mh-dim');"
@@ -4617,10 +4617,23 @@ public class MainActivity extends Activity {
                             BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()));
                             String line = r.readLine();
                             boolean ok = line != null && line.startsWith("GET /" + token);
-                            byte[] body = (ok ? reportText() : "not found").getBytes("UTF-8");
+                            boolean raw = ok && line.startsWith("GET /" + token + "/raw");
+                            String rep = ok ? reportText() : "not found";
+                            String page = raw || !ok ? rep : "<!doctype html><html dir=rtl><meta charset=utf-8>"
+                                    + "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                                    + "<body style='font-family:sans-serif;margin:8px'>"
+                                    + "<button id=b style='font-size:20px;padding:10px 18px' onclick='c()'>📋 نسخ التقرير كاملاً</button> "
+                                    + "<a href='/" + token + "/raw'>نص خام</a>"
+                                    + "<textarea id=t readonly style='width:100%;height:82vh;direction:ltr;margin-top:8px'>"
+                                    + rep.replace("&", "&amp;").replace("<", "&lt;") + "</textarea>"
+                                    + "<script>function c(){var t=document.getElementById('t');t.focus();t.select();"
+                                    + "var ok=false;try{ok=document.execCommand('copy');}catch(e){}"
+                                    + "if(!ok&&navigator.clipboard){navigator.clipboard.writeText(t.value);ok=true;}"
+                                    + "document.getElementById('b').textContent=ok?'✓ تم النسخ':'حدّد النص وانسخه يدوياً';}</script>";
+                            byte[] body = page.getBytes("UTF-8");
                             OutputStream o = c.getOutputStream();
                             o.write(("HTTP/1.1 " + (ok ? "200 OK" : "404 Not Found")
-                                    + "\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "
+                                    + "\r\nContent-Type: " + (raw || !ok ? "text/plain" : "text/html") + "; charset=utf-8\r\nContent-Length: "
                                     + body.length + "\r\nConnection: close\r\n\r\n").getBytes("UTF-8"));
                             o.write(body);
                             o.flush();
@@ -4893,18 +4906,62 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    /** The app's launcher icon taken at the highest density, so it stays sharp on 4K. */
+    /** Launcher icon at xhdpi (sharp but memory-safe); trimmed + scaled so every app fills the same area. */
     private Drawable hiIcon(PackageManager pm, ResolveInfo ri) {
+        Drawable d = null;
         try {
             android.content.pm.ApplicationInfo ai = ri.activityInfo.applicationInfo;
             int id = ri.activityInfo.icon != 0 ? ri.activityInfo.icon : ai.icon;
-            if (id != 0) {
-                Drawable d = pm.getResourcesForApplication(ai).getDrawableForDensity(id, 640, null);
-                if (d != null) return d;
-            }
+            if (id != 0) d = pm.getResourcesForApplication(ai).getDrawableForDensity(id, 320, null);
         } catch (Throwable ignored) {
         }
-        return ri.loadIcon(pm);
+        try {
+            if (d == null) d = ri.loadIcon(pm);
+        } catch (Throwable t) {
+            return pm.getDefaultActivityIcon();
+        }
+        if (!prefs.getBoolean("icon_norm", true)) return d;
+        try {
+            return normalizeIcon(d);
+        } catch (Throwable t) {
+            return d;
+        }
+    }
+
+    private Drawable normalizeIcon(Drawable d) {
+        final int N = 160;
+        Bitmap src = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas cv = new android.graphics.Canvas(src);
+        d.setBounds(0, 0, N, N);
+        d.draw(cv);
+        int[] px = new int[N * N];
+        src.getPixels(px, 0, N, 0, 0, N, N);
+        int x0 = N, y0 = N, x1 = -1, y1 = -1;
+        for (int y = 0; y < N; y++) {
+            for (int x = 0; x < N; x++) {
+                if ((px[y * N + x] >>> 24) > 24) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+            }
+        }
+        if (x1 < x0 || y1 < y0) return d;
+        int w = x1 - x0 + 1, h = y1 - y0 + 1, m = Math.max(w, h);
+        if (m < N / 3) return d;                        // practically empty: leave it
+        Bitmap out = Bitmap.createBitmap(N, N, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas oc = new android.graphics.Canvas(out);
+        float sc = (N * 0.96f) / m;
+        android.graphics.Matrix mx = new android.graphics.Matrix();
+        mx.postTranslate(-(x0 + w / 2f), -(y0 + h / 2f));
+        mx.postScale(sc, sc);
+        mx.postTranslate(N / 2f, N / 2f);
+        android.graphics.Paint pt = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG
+                | android.graphics.Paint.ANTI_ALIAS_FLAG);
+        oc.drawBitmap(src, mx, pt);
+        src.recycle();
+        return new android.graphics.drawable.BitmapDrawable(getResources(), out);
     }
 
     // --------------------------------------------------------- Screen saver

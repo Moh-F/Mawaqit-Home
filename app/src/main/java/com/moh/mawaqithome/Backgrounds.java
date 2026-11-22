@@ -209,7 +209,7 @@ final class Backgrounds {
         if (src == V_PIXABAY) {
             String j = get("https://pixabay.com/api/videos/?key=" + java.net.URLEncoder.encode(key.trim(), "UTF-8")
                     + "&q=" + java.net.URLEncoder.encode(topic, "UTF-8")
-                    + "&video_type=film&safesearch=true&per_page=50&page=" + (1 + rnd.nextInt(2)));
+                    + "&safesearch=true&per_page=50");
             JSONArray hs = new JSONObject(j).optJSONArray("hits");
             if (hs == null) return null;
             List<String[]> ok = new ArrayList<>();
@@ -251,39 +251,45 @@ final class Backgrounds {
             return ok.isEmpty() ? null : ok.get(rnd.nextInt(ok.size()));
         }
         // Wikimedia Commons: short nature/landscape clips, smallest VP9/WebM transcode >= 480p
-        String j = get("https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch="
-                + java.net.URLEncoder.encode("filetype:video " + topic, "UTF-8")
-                + "&gsrnamespace=6&gsrlimit=40&gsroffset=" + rnd.nextInt(80)
-                + "&prop=videoinfo&viprop=url%7Csize%7Cderivatives%7Cextmetadata&format=json");
-        JSONObject q = new JSONObject(j).optJSONObject("query");
-        if (q == null) return null;
-        JSONObject pages = q.getJSONObject("pages");
-        List<String[]> ok = new ArrayList<>();
-        for (Iterator<String> it = pages.keys(); it.hasNext(); ) {
-            JSONObject pg = pages.getJSONObject(it.next());
-            JSONArray vi = pg.optJSONArray("videoinfo");
-            if (vi == null || vi.length() == 0) continue;
-            JSONObject v = vi.getJSONObject(0);
-            double dur = v.optDouble("duration", 0);
-            if (dur < 4 || dur > 150) continue;
-            JSONArray dv = v.optJSONArray("derivatives");
-            String best = null;
-            int bh = 0;
-            for (int k = 0; dv != null && k < dv.length(); k++) {
-                JSONObject d = dv.getJSONObject(k);
-                String ty = d.optString("type");
-                int hgt = d.optInt("height");
-                if (!ty.startsWith("video/webm") || hgt < 480 || hgt > 1080) continue;
-                if (best == null || hgt < bh) { bh = hgt; best = d.optString("src"); }
+        String first = topic.split(" ")[0];
+        String[] qs = {topic, first, first};
+        for (int attempt = 0; attempt < 3; attempt++) {
+            String j = get("https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch="
+                    + java.net.URLEncoder.encode("filetype:video " + qs[attempt], "UTF-8")
+                    + "&gsrnamespace=6&gsrlimit=40&gsroffset=" + (attempt == 0 ? rnd.nextInt(30) : 0)
+                    + "&prop=videoinfo&viprop=url%7Csize%7Cderivatives%7Cextmetadata&format=json");
+            JSONObject q = new JSONObject(j).optJSONObject("query");
+            if (q == null) continue;
+            JSONObject pages = q.getJSONObject("pages");
+            List<String[]> ok = new ArrayList<>();
+            for (Iterator<String> it = pages.keys(); it.hasNext(); ) {
+                JSONObject pg = pages.getJSONObject(it.next());
+                JSONArray vi = pg.optJSONArray("videoinfo");
+                if (vi == null || vi.length() == 0) continue;
+                JSONObject v = vi.getJSONObject(0);
+                double dur = v.optDouble("duration", 0);
+                if (dur > 0 && (dur < 4 || dur > 300)) continue;
+                JSONArray dv = v.optJSONArray("derivatives");
+                String best = null;
+                int bh = 0;
+                for (int k = 0; dv != null && k < dv.length(); k++) {
+                    JSONObject d = dv.getJSONObject(k);
+                    String ty = d.optString("type");
+                    int hgt = d.optInt("height");
+                    if (!ty.startsWith("video/") || hgt < 360 || hgt > 1080) continue;
+                    if (ty.startsWith("video/mp4") || best == null || hgt < bh) { bh = hgt; best = d.optString("src"); }
+                    if (ty.startsWith("video/mp4")) break;
+                }
+                if (best == null) continue;
+                if (best.startsWith("//")) best = "https:" + best;
+                JSONObject em = v.optJSONObject("extmetadata");
+                String artist = em == null || em.optJSONObject("Artist") == null ? ""
+                        : em.getJSONObject("Artist").optString("value", "").replaceAll("<[^>]*>", "").trim();
+                ok.add(new String[]{best, "Wikimedia Commons — " + artist});
             }
-            if (best == null) continue;
-            if (best.startsWith("//")) best = "https:" + best;
-            JSONObject em = v.optJSONObject("extmetadata");
-            String artist = em == null || em.optJSONObject("Artist") == null ? ""
-                    : em.getJSONObject("Artist").optString("value", "").replaceAll("<[^>]*>", "").trim();
-            ok.add(new String[]{best, "Wikimedia Commons — " + artist});
+            if (!ok.isEmpty()) return ok.get(rnd.nextInt(ok.size()));
         }
-        return ok.isEmpty() ? null : ok.get(rnd.nextInt(ok.size()));
+        return null;
     }
 
     private static HttpURLConnection openAuth(String u, String key) throws Exception {
