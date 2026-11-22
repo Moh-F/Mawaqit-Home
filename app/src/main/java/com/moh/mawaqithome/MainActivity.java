@@ -692,22 +692,29 @@ public class MainActivity extends Activity {
 
     private static final String JS_STATE = "(function(){function vis(e){if(!e)return false;var r=e.getBoundingClientRect();"
             + "var c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none';}"
-            + "var a=document.querySelector('.center-time'),p=document.querySelector('.prayers');"
+            + "var cover='';function shown(e){if(!vis(e))return false;"
+            + "for(var n=e;n&&n.nodeType===1;n=n.parentElement){if(parseFloat(getComputedStyle(n).opacity)<0.2)return false;}"
+            + "var r=e.getBoundingClientRect(),pts=[[.5,.5],[.25,.3],[.75,.7],[.5,.15]],hid=0;"
+            + "for(var i=0;i<pts.length;i++){var t=document.elementFromPoint(r.left+r.width*pts[i][0],r.top+r.height*pts[i][1]);"
+            + "if(t&&!e.contains(t)&&!t.contains(e)){hid++;cover=String(t.className||t.id||t.tagName).slice(0,40);}}"
+            + "return hid<2;}"
+            + "var p=document.querySelector('.prayers');"
             + "function iq(){var all=document.querySelectorAll('body *');for(var i=0;i<all.length;i++){var e=all[i];"
             + "if(e.children.length>0)continue;var t=(e.textContent||'').trim();if(!t||t.length>60)continue;"
             + "if(/(الإقامة|الاقامة|إقامة|اقامة|iqama|iqamah)/i.test(t)&&vis(e)){var f=parseFloat(getComputedStyle(e).fontSize)||0;"
             + "if(f>=36)return true;}}return false;}"
-            + "if(!(vis(a)&&vis(p)))return '0';return iq()?'2':'1';})()";
+            + "if(!shown(p))return '0:'+cover;return iq()?'2':'1';})()";
 
     private final Runnable pageStateTask = new Runnable() {
         @Override public void run() {
             handler.postDelayed(this, 2000L);
             if (!pageOk || stage != 0) return;
             webView.evaluateJavascript(JS_STATE, v -> {
-                boolean main = v == null || v.contains("1");
+                boolean main = v == null || v.startsWith("\"1");
                 if (main != pageMain) {
                     pageMain = main;
-                    AppLog.info("PAGE", main ? "main screen" : (v != null && v.contains("2") ? "iqama screen" : "adhan screen"));
+                    AppLog.info("PAGE", main ? "main screen (prayer times visible)"
+                            : "prayer times hidden/covered (adhan, iqama, athkar, hadith…) state=" + v);
                     applyWeatherVis(true);
                 }
             });
@@ -1173,7 +1180,17 @@ public class MainActivity extends Activity {
 
     /** Weather-card pixel size: scales with the screen width and the "card size" setting. */
     private int wpad() {
-        return wsc(prefs.getInt("w_pad", 5));
+        return tgt(prefs.getInt("w_pad", 5));
+    }
+
+    /** A gap, shrunk by the "tighten" setting (0-100%). */
+    private int tgt(float v) {
+        return Math.round(wsc(v) * (100 - Math.max(0, Math.min(100, prefs.getInt("w_tight", 40)))) / 100f);
+    }
+
+    /** Negative margin that trims the font's own leading above/below a line. */
+    private int lead(TextView t) {
+        return -Math.round(t.getTextSize() * 0.14f * Math.max(0, Math.min(100, prefs.getInt("w_tight", 40))) / 100f);
     }
 
     private int wsc(float v) {
@@ -1258,14 +1275,20 @@ public class MainActivity extends Activity {
         weatherCard.setPadding(wpad(), wpad() * 3 / 5, wpad(), wpad() / 2);
         setPx(weatherCity, 12);
         setPx(weatherAge, 10);
+        LinearLayout.LayoutParams cl0 = (LinearLayout.LayoutParams) weatherCity.getLayoutParams();
+        cl0.topMargin = cl0.bottomMargin = lead(weatherCity);
+        weatherCity.setLayoutParams(cl0);
+        LinearLayout.LayoutParams al0 = (LinearLayout.LayoutParams) weatherAge.getLayoutParams();
+        al0.topMargin = al0.bottomMargin = lead(weatherAge);
+        weatherAge.setLayoutParams(al0);
         LinearLayout.LayoutParams sp = (LinearLayout.LayoutParams) wSep.getLayoutParams();
         sp.height = Math.max(1, wsc(1));
-        sp.topMargin = wsc(5);
-        sp.bottomMargin = wsc(3);
+        sp.topMargin = tgt(5);
+        sp.bottomMargin = tgt(3);
         wSep.setLayoutParams(sp);
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
         final boolean oneLine = !cols && prefs.getInt("w_lines", 1) == 1;
-        final int gap = wsc(prefs.getInt("w_gap", 2));
+        final int gap = tgt(prefs.getInt("w_gap", 2));
         wHead = 0;
         if (prefs.getBoolean("w_city", true))
             wHead = Math.max(wHead, (int) Math.ceil(Layout.getDesiredWidth(weatherCity.getText(), weatherCity.getPaint())));
@@ -1306,9 +1329,9 @@ public class MainActivity extends Activity {
             row.setOrientation(oneLine ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
             row.setBaselineAligned(false);
             row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : (oneLine ? Gravity.CENTER_VERTICAL : Gravity.LEFT));
-            int vp = wsc(prefs.getInt("w_rowgap", 1));
-            row.setPadding(cols ? wsc(2) : 0, vp, cols ? wsc(2) : 0, vp);
-            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wColW + wsc(4),
+            int vp = tgt(prefs.getInt("w_rowgap", 1));
+            row.setPadding(cols ? tgt(2) : 0, vp, cols ? tgt(2) : 0, vp);
+            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wColW + tgt(4),
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             main.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
@@ -1338,14 +1361,18 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams tl = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     : new LinearLayout.LayoutParams(wRowTemp, ViewGroup.LayoutParams.WRAP_CONTENT);
+            dl.topMargin = dl.bottomMargin = lead(wDay[i]);
+            il.topMargin = il.bottomMargin = lead(wIcon[i]);
+            tl.topMargin = tl.bottomMargin = lead(wTemp[i]);
             wDay[i].setLayoutParams(dl);
             wIcon[i].setLayoutParams(il);
             wTemp[i].setLayoutParams(tl);
             LinearLayout.LayoutParams sl2 = oneLine ? new LinearLayout.LayoutParams(
                     Math.max(1, wRowSub), ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (oneLine) sl2.leftMargin = sl2.rightMargin = wsc(prefs.getInt("w_gap", 2));
-            sl2.topMargin = oneLine ? 0 : wsc(1);
+            if (oneLine) sl2.leftMargin = sl2.rightMargin = gap;
+            sl2.topMargin = oneLine ? 0 : tgt(1);
+            sl2.bottomMargin = lead(wSub[i]);
             wSub[i].setLayoutParams(sl2);
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
@@ -1361,11 +1388,11 @@ public class MainActivity extends Activity {
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
         int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
-        if (prefs.getInt("w_layout", 0) == 1) return 2 * wpad() + nd * (wColW + wsc(4)) + 2;
+        if (prefs.getInt("w_layout", 0) == 1) return 2 * wpad() + nd * (wColW + tgt(4)) + 2;
         int mainW = (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
-                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * wsc(prefs.getInt("w_gap", 2));
+                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * tgt(prefs.getInt("w_gap", 2));
         boolean one = prefs.getInt("w_lines", 1) == 1;
-        int body = one ? mainW + (wRowSub > 0 ? wRowSub + 2 * wsc(prefs.getInt("w_gap", 2)) + 4 : 0)
+        int body = one ? mainW + (wRowSub > 0 ? wRowSub + 2 * tgt(prefs.getInt("w_gap", 2)) + 4 : 0)
                 : Math.max(mainW, wRowSub + 4);
         return 2 * wpad() + Math.max(body, wHead + 4) + 2;
     }
@@ -3162,8 +3189,17 @@ public class MainActivity extends Activity {
         Dlg create() {
             final Dlg d = new Dlg();
             d.backAction = () -> {
-                if (btnL[0] != null) btnL[0].onClick(d, DialogInterface.BUTTON_NEGATIVE);
+                if (btnL[0] != null) {
+                    btnL[0].onClick(d, DialogInterface.BUTTON_NEGATIVE);
+                    handler.post(() -> {
+                        if (topDlg == null && pendingReturn != null) returnPending();
+                    });
+                } else returnPending();
             };
+            topDlg = d;
+            d.setOnDismissListener(x -> {
+                if (topDlg == d) topDlg = null;
+            });
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             final android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
             int pct = Math.max(30, Math.min(100, prefs.getInt("ui_alpha", 92)));
@@ -3288,6 +3324,10 @@ public class MainActivity extends Activity {
                     d.dismiss();
                     if (btnL[which] != null) btnL[which].onClick(d, which == 2 ? DialogInterface.BUTTON_POSITIVE
                             : which == 1 ? DialogInterface.BUTTON_NEUTRAL : DialogInterface.BUTTON_NEGATIVE);
+                    else returnPending();
+                    if (which == 0 && btnL[0] != null) handler.post(() -> {
+                        if (topDlg == null && pendingReturn != null) returnPending();   // cancel that opened nothing: step back
+                    });
                 });
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
                         ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -3302,7 +3342,10 @@ public class MainActivity extends Activity {
                 bt.setGravity(Gravity.CENTER);
                 bt.setMinHeight(dp(46));
                 bt.setFocusable(true);
-                bt.setOnClickListener(v -> d.dismiss());
+                bt.setOnClickListener(v -> {
+                    d.dismiss();
+                    returnPending();
+                });
                 row.addView(bt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 firstBtn = bt;
             }
@@ -3413,15 +3456,32 @@ public class MainActivity extends Activity {
     }
 
     /** Menu/choice list that remembers the last highlighted row and shows it clearly. */
+    private Runnable pendingReturn;
+    private long pendingAt;
+    private Dlg topDlg;
+
+    /** Where "Back / Cancel / Close" of a dialog opened from a menu goes: back to that menu, one step. */
+    private void returnPending() {
+        Runnable r = pendingReturn;
+        pendingReturn = null;
+        if (r != null && android.os.SystemClock.elapsedRealtime() - pendingAt < 180_000L) r.run();
+    }
+
     private void listDialog(final String title, final String[] labels, int initial,
                             final Pick pick, final Runnable back) {
         final MenuAdapter ad = new MenuAdapter(labels, initial);
         DlgBuilder b = dialog(title).setAdapter(ad, (d, which) -> {
             lastPos.put(title, which);
+            final int w = which;
+            pendingReturn = () -> listDialog(title, labels, w, pick, back);
+            pendingAt = android.os.SystemClock.elapsedRealtime();
             pick.on(which);
         });
-        if (back != null) b.setNegativeButton("رجوع", (d, w) -> back.run());
-        else b.setNegativeButton("إغلاق", null);
+        if (back != null) b.setNegativeButton("رجوع", (d, w) -> {
+            pendingReturn = null;
+            back.run();
+        });
+        else b.setNegativeButton("إغلاق", (d, w) -> pendingReturn = null);
         final Dlg d = b.create();
         d.show();
         final ListView lv = d.getListView();
@@ -3569,9 +3629,11 @@ public class MainActivity extends Activity {
         if (ltr != null && !ltr.isEmpty()) {
             TextView b = new TextView(this);
             b.setTextColor(0xFFCFE3DA);
-            b.setTypeface(Typeface.MONOSPACE);
+            b.setTypeface(Typeface.DEFAULT);
             b.setTextDirection(View.TEXT_DIRECTION_LTR);
             b.setGravity(Gravity.CENTER);
+            b.setIncludeFontPadding(true);
+            b.setPadding(0, 0, 0, dp(8));
             b.setText(ltr);
             fitOneLine(b, ltr, fs(14));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -3964,12 +4026,13 @@ public class MainActivity extends Activity {
     private TextView addressView(String addr) {
         TextView a = new TextView(this);
         a.setTextColor(acc());
-        a.setTypeface(Typeface.MONOSPACE);
+        a.setTypeface(Typeface.DEFAULT_BOLD);
         a.setTextDirection(View.TEXT_DIRECTION_LTR);
         a.setGravity(Gravity.CENTER);
+        a.setIncludeFontPadding(true);
         a.setText(addr);
         fitOneLine(a, addr, fs(15));
-        a.setPadding(0, dp(6), 0, dp(6));
+        a.setPadding(0, dp(6), 0, dp(10));
         return a;
     }
 
@@ -4065,27 +4128,78 @@ public class MainActivity extends Activity {
 
     /** Screen capture of the launcher, shared through a QR code to a phone / laptop. */
     private void shareScreenshot() {
+        shareScreenshot(900L);
+    }
+
+    /** delay: time to let the person open the menu they want captured (menus are included in the picture). */
+    private void shareScreenshot(long delayMs) {
         final String ip = localIp();
         if (ip == null) {
             toast("لا توجد شبكة محلية");
             return;
         }
-        toast("سيُلتقط المشهد بعد لحظة…");
+        toast(delayMs > 2000 ? "افتح القائمة المطلوبة — سيُلتقط المشهد بعد " + (delayMs / 1000) + " ثوانٍ"
+                : "سيُلتقط المشهد بعد لحظة…");
         handler.postDelayed(() -> {
             try {
                 int w = root.getWidth(), h = root.getHeight();
                 Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                 Canvas cv = new Canvas(bm);
                 cv.drawColor(Color.BLACK);
+                String info = "";
+                // 1) our own background underneath (the WebView cannot be drawn with its pictures/videos)
                 if (videoBox != null && videoBox.getVisibility() == View.VISIBLE && vcur >= 0
                         && vtv[vcur] != null && vtv[vcur].isAvailable()) {
                     Bitmap vb = vtv[vcur].getBitmap();
-                    if (vb != null) cv.drawBitmap(vb, (w - vb.getWidth()) / 2f, (h - vb.getHeight()) / 2f, null);
+                    if (vb != null) {
+                        cv.drawBitmap(vb, (w - vb.getWidth()) / 2f, (h - vb.getHeight()) / 2f, null);
+                        info += " video";
+                    }
+                } else if (bgEnabled() && !bgVideo() && bgFile().exists()) {
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inSampleSize = 2;
+                    Bitmap img = android.graphics.BitmapFactory.decodeFile(bgFile().getAbsolutePath(), o);
+                    if (img != null) {
+                        float sc = Math.max(w / (float) img.getWidth(), h / (float) img.getHeight());
+                        cv.save();
+                        cv.translate((w - img.getWidth() * sc) / 2f, (h - img.getHeight() * sc) / 2f);
+                        cv.scale(sc, sc);
+                        cv.drawBitmap(img, 0, 0, null);
+                        cv.restore();
+                        cv.drawColor(Color.argb(Math.round(2.55f * Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35)))), 0, 0, 0));
+                        img.recycle();
+                        info += " image";
+                    }
                 }
+                // 2) the launcher itself (the WebView is drawn separately so a solid page colour can be detected)
+                Bitmap wb = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                Canvas wc = new Canvas(wb);
                 android.graphics.drawable.Drawable bgd = root.getBackground();
                 root.setBackground(null);
-                root.draw(cv);
+                root.draw(wc);
                 root.setBackground(bgd);
+                int opaque = 0, n = 0;
+                for (int y = 20; y < h; y += Math.max(1, h / 12))
+                    for (int x = 20; x < w; x += Math.max(1, w / 16)) {
+                        n++;
+                        if ((wb.getPixel(x, y) >>> 24) > 250) opaque++;
+                    }
+                AppLog.info("SHOT", "bg layers:" + info + "; launcher layer opaque samples " + opaque + "/" + n);
+                cv.drawBitmap(wb, 0, 0, null);
+                wb.recycle();
+                // 3) the open menu / dialog, if any
+                Dlg td = topDlg;
+                if (td != null && td.isShowing() && td.getWindow() != null) {
+                    View dv = td.getWindow().getDecorView();
+                    int[] loc = new int[2];
+                    int[] rl = new int[2];
+                    dv.getLocationOnScreen(loc);
+                    root.getLocationOnScreen(rl);
+                    cv.save();
+                    cv.translate(loc[0] - rl[0], loc[1] - rl[1]);
+                    dv.draw(cv);
+                    cv.restore();
+                }
                 ByteArrayOutputStream bo = new ByteArrayOutputStream();
                 bm.compress(Bitmap.CompressFormat.JPEG, 92, bo);
                 bm.recycle();
@@ -4104,13 +4218,14 @@ public class MainActivity extends Activity {
                     return;
                 }
                 handler.postDelayed(phoneSrv::stop, 10L * 60 * 1000);
+                pendingReturn = null;
                 qrDialog("لقطة الشاشة", "امسح الرمز بالجوال أو الكمبيوتر (نفس الواي فاي) لعرض الصورة وتنزيلها. "
                         + "ينتهي الرابط بعد 10 دقائق.", addr, "تم", null);
             } catch (Throwable e) {
                 AppLog.error("SHOT", "screenshot failed", e);
                 toast("تعذّر التقاط الصورة");
             }
-        }, 900L);
+        }, delayMs);
     }
 
     private void promptText(String title, String hint, String initial, final TextCb onOk) {
@@ -4462,6 +4577,9 @@ public class MainActivity extends Activity {
         l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 2) + "  (0 = ملتصقة)");
         a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 2, 0, 30, "", null,
                 this::layoutWeather, back, back));
+        l.add("📏  تقليل كل المسافات (المدينة، الأيام، الرموز…):  " + prefs.getInt("w_tight", 40) + "%  (100 = أقرب ما يمكن)");
+        a.add(() -> numberDialog("تقليل المسافات بين كل أجزاء البطاقة", "w_tight", 40, 0, 100, "%", null,
+                this::layoutWeather, back, back));
         l.add("▭  هامش البطاقة الخارجي:  " + prefs.getInt("w_pad", 5) + "  (0 = بلا هامش)");
         a.add(() -> numberDialog("هامش البطاقة الخارجي (أقل = بطاقة أصغر)", "w_pad", 5, 0, 30, "", null,
                 this::layoutWeather, back, back));
@@ -4728,8 +4846,10 @@ public class MainActivity extends Activity {
                 .setPositiveButton("حسناً", null).show());
         l.add("🌐  مشاركة عبر الشبكة المحلية");
         a.add(this::startLogServer);
-        l.add("📸  لقطة شاشة ومشاركتها بالجوال (رمز QR)");
-        a.add(this::shareScreenshot);
+        l.add("📸  لقطة شاشة (الواجهة فقط) ومشاركتها بالجوال");
+        a.add(() -> shareScreenshot(900L));
+        l.add("📸  لقطة بعد 12 ثانية — تشمل القائمة المفتوحة (افتحها بعد الضغط)");
+        a.add(() -> shareScreenshot(12_000L));
         l.add("🔎  فحص بنية الصفحة ومشاركته عبر الشبكة");
         a.add(this::inspectPage);
         l.add("🗑  مسح السجل");
