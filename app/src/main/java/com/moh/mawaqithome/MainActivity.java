@@ -681,6 +681,7 @@ public class MainActivity extends Activity {
         shiftLayer.removeView(webView);
         webView.destroy();
         AppLog.info("APP", "destroyed");
+        phoneSrv.stop();
         super.onDestroy();
     }
 
@@ -692,17 +693,21 @@ public class MainActivity extends Activity {
     private static final String JS_STATE = "(function(){function vis(e){if(!e)return false;var r=e.getBoundingClientRect();"
             + "var c=getComputedStyle(e);return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none';}"
             + "var a=document.querySelector('.center-time'),p=document.querySelector('.prayers');"
-            + "return (vis(a)&&vis(p))?'1':'0';})()";
+            + "function iq(){var all=document.querySelectorAll('body *');for(var i=0;i<all.length;i++){var e=all[i];"
+            + "if(e.children.length>0)continue;var t=(e.textContent||'').trim();if(!t||t.length>60)continue;"
+            + "if(/(الإقامة|الاقامة|إقامة|اقامة|iqama|iqamah)/i.test(t)&&vis(e)){var f=parseFloat(getComputedStyle(e).fontSize)||0;"
+            + "if(f>=36)return true;}}return false;}"
+            + "if(!(vis(a)&&vis(p)))return '0';return iq()?'2':'1';})()";
 
     private final Runnable pageStateTask = new Runnable() {
         @Override public void run() {
             handler.postDelayed(this, 2000L);
             if (!pageOk || stage != 0) return;
             webView.evaluateJavascript(JS_STATE, v -> {
-                boolean main = v == null || !v.contains("0");
+                boolean main = v == null || v.contains("1");
                 if (main != pageMain) {
                     pageMain = main;
-                    AppLog.info("PAGE", main ? "main screen" : "adhan/iqama screen");
+                    AppLog.info("PAGE", main ? "main screen" : (v != null && v.contains("2") ? "iqama screen" : "adhan screen"));
                     applyWeatherVis(true);
                 }
             });
@@ -712,7 +717,9 @@ public class MainActivity extends Activity {
     private void applyWeatherVis(boolean animate) {
         if (weatherCard == null || !prefs.getBoolean("w_show", true)) return;
         boolean visible = (pageMain || !prefs.getBoolean("w_hide_adhan", true));
-        weatherCard.animate().alpha(visible ? 1f : 0f).setDuration(animate ? ms(600L) : 0L).start();
+        int pcl = prefs.getInt("sv_clear", 0);
+        float full = (stage >= 1 && stage <= 2 && pcl > 0) ? 1f - pcl / 100f : 1f;
+        weatherCard.animate().alpha(visible ? full : 0f).setDuration(animate ? ms(600L) : 0L).start();
     }
 
     private void doWake() {
@@ -1165,6 +1172,10 @@ public class MainActivity extends Activity {
     }
 
     /** Weather-card pixel size: scales with the screen width and the "card size" setting. */
+    private int wpad() {
+        return wsc(prefs.getInt("w_pad", 5));
+    }
+
     private int wsc(float v) {
         return Math.round(v * unit() * prefs.getInt("w_size", 100) / 100f);
     }
@@ -1244,7 +1255,7 @@ public class MainActivity extends Activity {
 
     /** Sizes every part of the card from the screen width, so it stays a small tidy rectangle. */
     private void layoutWeather() {
-        weatherCard.setPadding(wsc(14), wsc(8), wsc(14), wsc(6));
+        weatherCard.setPadding(wpad(), wpad() * 3 / 5, wpad(), wpad() / 2);
         setPx(weatherCity, 12);
         setPx(weatherAge, 10);
         LinearLayout.LayoutParams sp = (LinearLayout.LayoutParams) wSep.getLayoutParams();
@@ -1253,14 +1264,14 @@ public class MainActivity extends Activity {
         sp.bottomMargin = wsc(3);
         wSep.setLayoutParams(sp);
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
-        final boolean oneLine = !cols && prefs.getInt("w_lines", 0) == 1;
-        final int gap = wsc(prefs.getInt("w_gap", 4));
+        final boolean oneLine = !cols && prefs.getInt("w_lines", 1) == 1;
+        final int gap = wsc(prefs.getInt("w_gap", 2));
         wHead = 0;
         if (prefs.getBoolean("w_city", true))
             wHead = Math.max(wHead, (int) Math.ceil(Layout.getDesiredWidth(weatherCity.getText(), weatherCity.getPaint())));
         if (prefs.getBoolean("w_age", true))
             wHead = Math.max(wHead, (int) Math.ceil(Layout.getDesiredWidth(weatherAge.getText(), weatherAge.getPaint())));
-        if (!cols) {                                   // measure real text so columns hug their content
+        {                                              // measure real text so columns hug their content
             int dW = 0, iW = 0, tW = 0, subW = 0;
             for (int i = 0; i < 3; i++) {
                 setPx(wDay[i], 12);
@@ -1271,13 +1282,14 @@ public class MainActivity extends Activity {
                 dW = Math.max(dW, (int) Math.ceil(Layout.getDesiredWidth(wDay[i].getText(), wDay[i].getPaint())));
                 iW = Math.max(iW, (int) Math.ceil(Layout.getDesiredWidth(wIcon[i].getText(), wIcon[i].getPaint())));
                 tW = Math.max(tW, (int) Math.ceil(Layout.getDesiredWidth(wTemp[i].getText(), wTemp[i].getPaint())));
-                if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(wsc(230),
+                if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(cols ? wsc(120) : wsc(230),
                         (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint()))));
             }
             wRowSub = subW;
-            wRowDay = dW > 0 ? dW + wsc(4) : wsc(80);
-            wRowIcon = iW > 0 ? iW + wsc(4) : wsc(34);
-            wRowTemp = tW > 0 ? tW + wsc(4) : wsc(80);
+            wRowDay = dW > 0 ? dW + 3 : wsc(80);
+            wRowIcon = iW > 0 ? iW + 3 : wsc(34);
+            wRowTemp = tW > 0 ? tW + 3 : wsc(80);
+            wColW = Math.max(Math.max(wRowDay, wRowIcon), Math.max(wRowTemp, subW + 3));
         }
         final int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
         weatherCity.setVisibility(prefs.getBoolean("w_city", true) ? View.VISIBLE : View.GONE);
@@ -1294,8 +1306,9 @@ public class MainActivity extends Activity {
             row.setOrientation(oneLine ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
             row.setBaselineAligned(false);
             row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : (oneLine ? Gravity.CENTER_VERTICAL : Gravity.LEFT));
-            row.setPadding(cols ? wsc(6) : 0, wsc(3), cols ? wsc(6) : 0, wsc(3));
-            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wsc(104),
+            int vp = wsc(prefs.getInt("w_rowgap", 1));
+            row.setPadding(cols ? wsc(2) : 0, vp, cols ? wsc(2) : 0, vp);
+            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wColW + wsc(4),
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             main.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
@@ -1331,7 +1344,7 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams sl2 = oneLine ? new LinearLayout.LayoutParams(
                     Math.max(1, wRowSub), ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (oneLine) sl2.leftMargin = sl2.rightMargin = wsc(5);
+            if (oneLine) sl2.leftMargin = sl2.rightMargin = wsc(prefs.getInt("w_gap", 2));
             sl2.topMargin = oneLine ? 0 : wsc(1);
             wSub[i].setLayoutParams(sl2);
         }
@@ -1348,15 +1361,16 @@ public class MainActivity extends Activity {
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
         int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
-        if (prefs.getInt("w_layout", 0) == 1) return wsc(14 + 14 + nd * 112);
+        if (prefs.getInt("w_layout", 0) == 1) return 2 * wpad() + nd * (wColW + wsc(4)) + 2;
         int mainW = (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
-                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * wsc(prefs.getInt("w_gap", 4));
-        boolean one = prefs.getInt("w_lines", 0) == 1;
-        int body = one ? mainW + (wRowSub > 0 ? wRowSub + wsc(10) : 0) : Math.max(mainW, wRowSub + wsc(4));
-        return wsc(14 + 14) + Math.max(body, wHead + wsc(6));
+                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * wsc(prefs.getInt("w_gap", 2));
+        boolean one = prefs.getInt("w_lines", 1) == 1;
+        int body = one ? mainW + (wRowSub > 0 ? wRowSub + 2 * wsc(prefs.getInt("w_gap", 2)) + 4 : 0)
+                : Math.max(mainW, wRowSub + 4);
+        return 2 * wpad() + Math.max(body, wHead + 4) + 2;
     }
 
-    private int wRowDay, wRowIcon, wRowTemp, wRowSub, wHead;
+    private int wRowDay, wRowIcon, wRowTemp, wRowSub, wHead, wColW;
 
     private LinearLayout.LayoutParams mlp(int w, int l, int r) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -3028,6 +3042,12 @@ public class MainActivity extends Activity {
     private class Dlg extends Dialog {
         ListView listView;
         View focusFirst;
+        Runnable backAction;
+
+        @Override public void onBackPressed() {
+            dismiss();                                  // Back = one step back (the "رجوع" button), not out of the menus
+            if (backAction != null) backAction.run();
+        }
 
         Dlg() {
             super(MainActivity.this, R.style.LauncherDialog);
@@ -3141,6 +3161,9 @@ public class MainActivity extends Activity {
 
         Dlg create() {
             final Dlg d = new Dlg();
+            d.backAction = () -> {
+                if (btnL[0] != null) btnL[0].onClick(d, DialogInterface.BUTTON_NEGATIVE);
+            };
             d.requestWindowFeature(Window.FEATURE_NO_TITLE);
             final android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
             int pct = Math.max(30, Math.min(100, prefs.getInt("ui_alpha", 92)));
@@ -3512,6 +3535,18 @@ public class MainActivity extends Activity {
     }
 
     /** Scrollable info dialog: Arabic text (RTL) plus an optional LTR block (paths, logs). */
+    /** One unbroken line: shrinks the text until it fits the dialog width. */
+    private void fitOneLine(TextView t, String text, float startPx) {
+        int avail = Math.min(getResources().getDisplayMetrics().widthPixels * 7 / 10, dp(620)) - dp(60);
+        float px = startPx;
+        t.setSingleLine(true);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px);
+        while (px > dp(8) && t.getPaint().measureText(text) > avail) {
+            px -= 1f;
+            t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px);
+        }
+    }
+
     private Dlg showInfo(String title, String rtl, String ltr, String posLabel,
                                  final Runnable pos, String neuLabel, final Runnable neu,
                                  String negLabel, final Runnable negAct) {
@@ -3533,12 +3568,12 @@ public class MainActivity extends Activity {
         }
         if (ltr != null && !ltr.isEmpty()) {
             TextView b = new TextView(this);
-            b.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(12));
             b.setTextColor(0xFFCFE3DA);
             b.setTypeface(Typeface.MONOSPACE);
             b.setTextDirection(View.TEXT_DIRECTION_LTR);
-            b.setGravity(Gravity.LEFT);
+            b.setGravity(Gravity.CENTER);
             b.setText(ltr);
+            fitOneLine(b, ltr, fs(14));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = dp(10);
@@ -3926,6 +3961,158 @@ public class MainActivity extends Activity {
         dialog("Mawaqit Home").centered().setView(sv).setPositiveButton("حسناً", null).show();
     }
 
+    private TextView addressView(String addr) {
+        TextView a = new TextView(this);
+        a.setTextColor(acc());
+        a.setTypeface(Typeface.MONOSPACE);
+        a.setTextDirection(View.TEXT_DIRECTION_LTR);
+        a.setGravity(Gravity.CENTER);
+        a.setText(addr);
+        fitOneLine(a, addr, fs(15));
+        a.setPadding(0, dp(6), 0, dp(6));
+        return a;
+    }
+
+    private ImageView qrView(String data) {
+        ImageView qr = new ImageView(this);
+        try {
+            com.google.zxing.common.BitMatrix m = new com.google.zxing.qrcode.QRCodeWriter().encode(data,
+                    com.google.zxing.BarcodeFormat.QR_CODE, 400, 400);
+            Bitmap bm = Bitmap.createBitmap(400, 400, Bitmap.Config.RGB_565);
+            for (int x = 0; x < 400; x++)
+                for (int y = 0; y < 400; y++) bm.setPixel(x, y, m.get(x, y) ? Color.BLACK : Color.WHITE);
+            qr.setImageBitmap(bm);
+        } catch (Exception e) {
+            AppLog.error("QR", "qr failed", e);
+        }
+        return qr;
+    }
+
+    private final PhoneServer phoneSrv = new PhoneServer();
+
+    private static String newToken() {
+        return Long.toString(Math.abs(new java.security.SecureRandom().nextLong()), 36).substring(0, 6);
+    }
+
+    /** Dialog with a QR code + address (own line) for a phone/laptop on the same network. */
+    private Dlg qrDialog(String title, String msg, String addr, String okLabel, final Runnable onClose) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.addView(qrView(addr), new LinearLayout.LayoutParams(dp(210), dp(210)));
+        TextView t = text(13, false);
+        t.setText(msg);
+        t.setGravity(Gravity.CENTER);
+        t.setTextDirection(View.TEXT_DIRECTION_RTL);
+        box.addView(t);
+        box.addView(addressView(addr));
+        DlgBuilder b = dialog(title).setView(box);
+        b.setPositiveButton(okLabel, (d, w) -> {
+            phoneSrv.stop();
+            if (onClose != null) onClose.run();
+        });
+        b.setNegativeButton("إلغاء", (d, w) -> {
+            phoneSrv.stop();
+            if (onClose != null) onClose.run();
+        });
+        Dlg d = b.create();
+        d.show();
+        return d;
+    }
+
+    /** Type text on a phone/laptop instead of the remote: QR code -> small web form -> text arrives here. */
+    private void phoneInput(final String title, final String initial, final TextCb cb) {
+        final String ip = localIp();
+        if (ip == null) {
+            toast("لا توجد شبكة محلية — أدخل النص يدوياً");
+            return;
+        }
+        final String token = newToken();
+        final String addr = "http://" + ip + ":8767/" + token;
+        final Dlg[] dh = new Dlg[1];
+        boolean ok = phoneSrv.start(8767, (m, path, body) -> {
+            if (!path.startsWith("/" + token)) return new PhoneServer.Resp(404, "text/plain", new byte[0]);
+            if (m.equals("POST")) {
+                String txt = "";
+                try {
+                    for (String kv : new String(body, "UTF-8").split("&"))
+                        if (kv.startsWith("t=")) txt = urlDecode(kv.substring(2));
+                } catch (Exception ignored) {
+                }
+                final String ft = txt.trim();
+                runOnUiThread(() -> {
+                    phoneSrv.stop();
+                    try {
+                        if (dh[0] != null) dh[0].dismiss();
+                    } catch (Exception ignored) {
+                    }
+                    cb.on(ft);
+                });
+                return PhoneServer.Resp.html("<h2>✓ وصل النص إلى الشاشة</h2>");
+            }
+            return PhoneServer.Resp.html("<h2>" + esc(title) + "</h2><form method=post action='/" + token + "'>"
+                    + "<textarea name=t rows=6 style='width:100%;direction:ltr;font-size:18px'>" + esc(initial)
+                    + "</textarea><p><button style='font-size:22px;padding:12px 28px'>💾 إرسال إلى الشاشة</button></p></form>");
+        });
+        if (!ok) {
+            toast("تعذّر تشغيل الخادم");
+            return;
+        }
+        handler.postDelayed(phoneSrv::stop, 10L * 60 * 1000);
+        dh[0] = qrDialog(title, "امسح الرمز بالجوال (نفس الواي فاي) أو افتح العنوان، اكتب النص ثم اضغط «إرسال».",
+                addr, "إغلاق", null);
+    }
+
+    /** Screen capture of the launcher, shared through a QR code to a phone / laptop. */
+    private void shareScreenshot() {
+        final String ip = localIp();
+        if (ip == null) {
+            toast("لا توجد شبكة محلية");
+            return;
+        }
+        toast("سيُلتقط المشهد بعد لحظة…");
+        handler.postDelayed(() -> {
+            try {
+                int w = root.getWidth(), h = root.getHeight();
+                Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                Canvas cv = new Canvas(bm);
+                cv.drawColor(Color.BLACK);
+                if (videoBox != null && videoBox.getVisibility() == View.VISIBLE && vcur >= 0
+                        && vtv[vcur] != null && vtv[vcur].isAvailable()) {
+                    Bitmap vb = vtv[vcur].getBitmap();
+                    if (vb != null) cv.drawBitmap(vb, (w - vb.getWidth()) / 2f, (h - vb.getHeight()) / 2f, null);
+                }
+                android.graphics.drawable.Drawable bgd = root.getBackground();
+                root.setBackground(null);
+                root.draw(cv);
+                root.setBackground(bgd);
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                bm.compress(Bitmap.CompressFormat.JPEG, 92, bo);
+                bm.recycle();
+                final byte[] jpg = bo.toByteArray();
+                final String token = newToken();
+                final String addr = "http://" + ip + ":8767/" + token;
+                boolean ok = phoneSrv.start(8767, (m, path, body) -> {
+                    if (!path.startsWith("/" + token)) return new PhoneServer.Resp(404, "text/plain", new byte[0]);
+                    if (path.endsWith(".jpg")) return new PhoneServer.Resp(200, "image/jpeg", jpg);
+                    return PhoneServer.Resp.html("<h2>لقطة الشاشة</h2><img src='/" + token
+                            + "/screen.jpg' style='width:100%'><p><a download='mawaqit-screen.jpg' href='/" + token
+                            + "/screen.jpg' style='font-size:22px'>⬇ تنزيل الصورة</a></p>");
+                });
+                if (!ok) {
+                    toast("تعذّر تشغيل الخادم");
+                    return;
+                }
+                handler.postDelayed(phoneSrv::stop, 10L * 60 * 1000);
+                qrDialog("لقطة الشاشة", "امسح الرمز بالجوال أو الكمبيوتر (نفس الواي فاي) لعرض الصورة وتنزيلها. "
+                        + "ينتهي الرابط بعد 10 دقائق.", addr, "تم", null);
+            } catch (Throwable e) {
+                AppLog.error("SHOT", "screenshot failed", e);
+                toast("تعذّر التقاط الصورة");
+            }
+        }, 900L);
+    }
+
     private void promptText(String title, String hint, String initial, final TextCb onOk) {
         final EditText et = new EditText(this);
         et.setSingleLine(true);
@@ -3937,8 +4124,10 @@ public class MainActivity extends Activity {
         }
         et.setText(initial);
         et.setSelection(et.getText().length());
+        final String pTitle = title;
         dialog(title).setView(et)
                 .setPositiveButton("حفظ", (d, w) -> onOk.on(et.getText().toString().trim()))
+                .setNeutralButton("📱 من الجوال", (d, w) -> phoneInput(pTitle, et.getText().toString(), onOk))
                 .setNegativeButton("إلغاء", null).show();
     }
 
@@ -3971,6 +4160,9 @@ public class MainActivity extends Activity {
                         showSaverSettings();
                     }, this::showSaverSettings));
         }
+        l.add("🫧  شفافية كل العناصر أثناء شاشة التوقف:  " + prefs.getInt("sv_clear", 0) + "%  (لتظهر الخلفية أكثر)");
+        a.add(() -> numberDialog("شفافية الصفحة والبطاقة أثناء شاشة التوقف", "sv_clear", 0, 0, 90, "%", null,
+                null, this::showSaverSettings, this::showSaverSettings));
         l.add("⚡ وضع تجربة سريع (1 / 2 / 3 دقائق)");
         a.add(() -> applyPreset(new int[]{1, 2, 3, 0}));
         l.add("↩ الافتراضي (10 / 15 / 20 / متوقف)");
@@ -4253,9 +4445,9 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
-        l.add("☰  أسطر كل يوم:  " + (prefs.getInt("w_lines", 0) == 1 ? "سطر واحد" : "سطران"));
+        l.add("☰  أسطر كل يوم:  " + (prefs.getInt("w_lines", 1) == 1 ? "سطر واحد" : "سطران"));
         a.add(() -> choice("عدد أسطر كل يوم", new String[]{"سطران (التفاصيل تحت اليوم)", "سطر واحد (كل شيء بسطر)"},
-                prefs.getInt("w_lines", 0), i -> {
+                prefs.getInt("w_lines", 1), i -> {
                     prefs.edit().putInt("w_lines", i).apply();
                     layoutWeather();
                     showWeatherSettings();
@@ -4267,8 +4459,14 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
-        l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 4) + "  (0 = ملتصقة)");
-        a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 4, 0, 30, "", null,
+        l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 2) + "  (0 = ملتصقة)");
+        a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 2, 0, 30, "", null,
+                this::layoutWeather, back, back));
+        l.add("▭  هامش البطاقة الخارجي:  " + prefs.getInt("w_pad", 5) + "  (0 = بلا هامش)");
+        a.add(() -> numberDialog("هامش البطاقة الخارجي (أقل = بطاقة أصغر)", "w_pad", 5, 0, 30, "", null,
+                this::layoutWeather, back, back));
+        l.add("↕  التباعد بين الأيام:  " + prefs.getInt("w_rowgap", 1) + "  (0 = ملتصقة)");
+        a.add(() -> numberDialog("التباعد بين الأيام (أقل = أقرب)", "w_rowgap", 1, 0, 30, "", null,
                 this::layoutWeather, back, back));
         l.add("🔠  حجم الخط داخل البطاقة:  " + prefs.getInt("w_font", 100) + "%");
         a.add(() -> numberDialog("حجم الخط داخل البطاقة (تصغير/تكبير)", "w_font", 100, 50, 250, "%", null,
@@ -4280,7 +4478,7 @@ public class MainActivity extends Activity {
         a.add(this::showWeatherFields);
         l.add("🎨  الشكل (الزوايا والإطار والخط الفاصل)");
         a.add(this::showWeatherLook);
-        l.add("🕌  إخفاء البطاقة وقت الأذان:  " + onOff(prefs.getBoolean("w_hide_adhan", true)));
+        l.add("🕌  إخفاء البطاقة وقت الأذان والإقامة:  " + onOff(prefs.getBoolean("w_hide_adhan", true)));
         a.add(() -> {
             prefs.edit().putBoolean("w_hide_adhan", !prefs.getBoolean("w_hide_adhan", true)).apply();
             applyWeatherVis(true);
@@ -4530,6 +4728,8 @@ public class MainActivity extends Activity {
                 .setPositiveButton("حسناً", null).show());
         l.add("🌐  مشاركة عبر الشبكة المحلية");
         a.add(this::startLogServer);
+        l.add("📸  لقطة شاشة ومشاركتها بالجوال (رمز QR)");
+        a.add(this::shareScreenshot);
         l.add("🔎  فحص بنية الصفحة ومشاركته عبر الشبكة");
         a.add(this::inspectPage);
         l.add("🗑  مسح السجل");
@@ -4651,6 +4851,7 @@ public class MainActivity extends Activity {
         if (vidOn || imgOn) css.append("html{background:#000!important}body{background:none!important}");
         if (natOn) css.append("html,body{background:transparent!important}");
         applyNativeVideo();
+        applySaverClear();
         String js = "(function(){window.__mhvid=" + JSONObject.quote(vidOn ? prefs.getString("bg_vurl", "") : "")
                 + ";window.__mhdim=" + (Math.max(0, Math.min(85, prefs.getInt("bg_dim", 35))) / 100f)
                 + ";window.__mhimg=" + JSONObject.quote(imgOn ? "/__mhbg/bg_" + prefs.getInt("bg_slot", 0)
@@ -5074,10 +5275,16 @@ public class MainActivity extends Activity {
         }
         box.addView(qr, new LinearLayout.LayoutParams(dp(210), dp(210)));
         TextView t = text(13, false);
-        t.setText("1) على الجوال (نفس الواي فاي) امسح الرمز أو افتح:\n" + addr
-                + "\n2) الصق الروابط واضغط «حفظ» — تصل هنا فوراً.");
+        t.setText("على الجوال (نفس الواي فاي) امسح الرمز أو افتح هذا العنوان:");
         t.setGravity(Gravity.CENTER);
+        t.setTextDirection(View.TEXT_DIRECTION_RTL);
         box.addView(t);
+        box.addView(addressView(addr));
+        TextView t2 = text(13, false);
+        t2.setText("ثم الصق الروابط واضغط «حفظ» — تصل هنا فوراً.");
+        t2.setGravity(Gravity.CENTER);
+        t2.setTextDirection(View.TEXT_DIRECTION_RTL);
+        box.addView(t2);
         dialog("إضافة روابط من الجوال").setView(box)
                 .setPositiveButton("تم", (d, w) -> {
                     stopLinkServer();
@@ -5816,6 +6023,7 @@ public class MainActivity extends Activity {
         strip.animate().translationY(ui ? 0f : stripH + dp(6)).setDuration(dur)
                 .setInterpolator(ip).start();
         applyWeatherVis(animate);
+        applySaverClear();
 
         if (!fillMode) {
             webView.animate().scaleX(ui ? pageRatio : 1f).scaleY(ui ? pageRatio : 1f)
@@ -5828,6 +6036,18 @@ public class MainActivity extends Activity {
         overlay.animate().alpha(dark).setDuration(animate ? (s >= 2 ? 4000L : ms(500L)) : 0L).start();
         AppLog.info("SAVER", "stage " + s);
         if (ui) maybeShowNotice();
+    }
+
+    /** During the saver the page content gets more transparent so the picture / video shows more. */
+    private void applySaverClear() {
+        if (webView == null) return;
+        int pc = prefs.getInt("sv_clear", 0);
+        boolean on = stage >= 1 && stage <= 2 && pc > 0;
+        String css = on ? "body > *:not(#mh-i0):not(#mh-i1):not(#mh-dim){opacity:" + (1 - pc / 100f)
+                + " !important;transition:opacity 1.5s}" : "";
+        webView.evaluateJavascript("(function(){var s=document.getElementById('mh-sv');if(!s){"
+                + "s=document.createElement('style');s.id='mh-sv';(document.head||document.documentElement).appendChild(s);}"
+                + "s.textContent='" + css + "';})()", null);
     }
 
     private void applyRootBg() {
