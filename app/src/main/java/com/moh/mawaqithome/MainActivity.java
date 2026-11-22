@@ -1305,9 +1305,10 @@ public class MainActivity extends Activity {
                 dW = Math.max(dW, (int) Math.ceil(Layout.getDesiredWidth(wDay[i].getText(), wDay[i].getPaint())));
                 iW = Math.max(iW, (int) Math.ceil(Layout.getDesiredWidth(wIcon[i].getText(), wIcon[i].getPaint())));
                 tW = Math.max(tW, (int) Math.ceil(Layout.getDesiredWidth(wTemp[i].getText(), wTemp[i].getPaint())));
-                if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(cols ? wsc(120) : wsc(230),
+                if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(wsc(230),
                         (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint()))));
             }
+            if (cols) subW = Math.min(subW, Math.max(Math.max(dW, Math.max(iW, tW)) + wsc(14), wsc(50)));   // sub text wraps instead of widening the column
             wRowSub = subW;
             wRowDay = dW > 0 ? dW + 3 : wsc(80);
             wRowIcon = iW > 0 ? iW + 3 : wsc(34);
@@ -1330,8 +1331,10 @@ public class MainActivity extends Activity {
             row.setBaselineAligned(false);
             row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : (oneLine ? Gravity.CENTER_VERTICAL : Gravity.LEFT));
             int vp = tgt(prefs.getInt("w_rowgap", 1));
-            row.setPadding(cols ? tgt(2) : 0, vp, cols ? tgt(2) : 0, vp);
-            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wColW + tgt(4),
+            final int cg = tgt(prefs.getInt("w_colgap", 2));
+            final int ir = tgt(prefs.getInt("w_inrow", 1));
+            row.setPadding(cols ? cg / 2 : 0, vp, cols ? cg - cg / 2 : 0, vp);
+            row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wColW + cg,
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             main.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
@@ -1364,6 +1367,10 @@ public class MainActivity extends Activity {
             dl.topMargin = dl.bottomMargin = lead(wDay[i]);
             il.topMargin = il.bottomMargin = lead(wIcon[i]);
             tl.topMargin = tl.bottomMargin = lead(wTemp[i]);
+            if (cols) {
+                il.topMargin += ir;
+                tl.topMargin += ir;
+            }
             wDay[i].setLayoutParams(dl);
             wIcon[i].setLayoutParams(il);
             wTemp[i].setLayoutParams(tl);
@@ -1371,7 +1378,7 @@ public class MainActivity extends Activity {
                     Math.max(1, wRowSub), ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             if (oneLine) sl2.leftMargin = sl2.rightMargin = gap;
-            sl2.topMargin = oneLine ? 0 : tgt(1);
+            sl2.topMargin = oneLine ? 0 : ir;
             sl2.bottomMargin = lead(wSub[i]);
             wSub[i].setLayoutParams(sl2);
         }
@@ -1388,7 +1395,7 @@ public class MainActivity extends Activity {
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
         int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
-        if (prefs.getInt("w_layout", 0) == 1) return 2 * wpad() + nd * (wColW + tgt(4)) + 2;
+        if (prefs.getInt("w_layout", 0) == 1) return 2 * wpad() + nd * (wColW + tgt(prefs.getInt("w_colgap", 2))) + 2;
         int mainW = (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
                 + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * tgt(prefs.getInt("w_gap", 2));
         boolean one = prefs.getInt("w_lines", 1) == 1;
@@ -3325,8 +3332,8 @@ public class MainActivity extends Activity {
                     if (btnL[which] != null) btnL[which].onClick(d, which == 2 ? DialogInterface.BUTTON_POSITIVE
                             : which == 1 ? DialogInterface.BUTTON_NEUTRAL : DialogInterface.BUTTON_NEGATIVE);
                     else returnPending();
-                    if (which == 0 && btnL[0] != null) handler.post(() -> {
-                        if (topDlg == null && pendingReturn != null) returnPending();   // cancel that opened nothing: step back
+                    if (btnL[which] != null) handler.post(() -> {
+                        if (topDlg == null && pendingReturn != null) returnPending();   // button that opened nothing: step back
                     });
                 });
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
@@ -4059,17 +4066,20 @@ public class MainActivity extends Activity {
 
     /** Dialog with a QR code + address (own line) for a phone/laptop on the same network. */
     private Dlg qrDialog(String title, String msg, String addr, String okLabel, final Runnable onClose) {
+        ScrollView sv = new ScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
-        box.addView(qrView(addr), new LinearLayout.LayoutParams(dp(210), dp(210)));
-        TextView t = text(13, false);
+        box.setPadding(dp(8), 0, dp(8), dp(4));
+        box.addView(addressView(addr));                         // the address first: always visible
+        box.addView(qrView(addr), new LinearLayout.LayoutParams(dp(170), dp(170)));
+        TextView t = text(12, false);
         t.setText(msg);
         t.setGravity(Gravity.CENTER);
         t.setTextDirection(View.TEXT_DIRECTION_RTL);
         box.addView(t);
-        box.addView(addressView(addr));
-        DlgBuilder b = dialog(title).setView(box);
+        sv.addView(box);
+        DlgBuilder b = dialog(title).setView(sv);
         b.setPositiveButton(okLabel, (d, w) -> {
             phoneSrv.stop();
             if (onClose != null) onClose.run();
@@ -4583,7 +4593,13 @@ public class MainActivity extends Activity {
         l.add("▭  هامش البطاقة الخارجي:  " + prefs.getInt("w_pad", 5) + "  (0 = بلا هامش)");
         a.add(() -> numberDialog("هامش البطاقة الخارجي (أقل = بطاقة أصغر)", "w_pad", 5, 0, 30, "", null,
                 this::layoutWeather, back, back));
-        l.add("↕  التباعد بين الأيام:  " + prefs.getInt("w_rowgap", 1) + "  (0 = ملتصقة)");
+        l.add("↔  التباعد بين أعمدة الأيام (اليوم / غداً / بعد غد):  " + prefs.getInt("w_colgap", 2) + "  (0 = ملتصقة)");
+        a.add(() -> numberDialog("التباعد بين أعمدة الأيام (أقل = أقرب)", "w_colgap", 2, 0, 30, "", null,
+                this::layoutWeather, back, back));
+        l.add("↨  التباعد بين الأسطر داخل اليوم الواحد:  " + prefs.getInt("w_inrow", 1) + "  (0 = ملتصقة)");
+        a.add(() -> numberDialog("التباعد بين الأسطر داخل اليوم الواحد", "w_inrow", 1, 0, 30, "", null,
+                this::layoutWeather, back, back));
+        l.add("↕  التباعد بين صفوف الأيام:  " + prefs.getInt("w_rowgap", 1) + "  (0 = ملتصقة)");
         a.add(() -> numberDialog("التباعد بين الأيام (أقل = أقرب)", "w_rowgap", 1, 0, 30, "", null,
                 this::layoutWeather, back, back));
         l.add("🔠  حجم الخط داخل البطاقة:  " + prefs.getInt("w_font", 100) + "%");
@@ -5393,19 +5409,22 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             AppLog.error("LINKSRV", "qr failed", e);
         }
-        box.addView(qr, new LinearLayout.LayoutParams(dp(210), dp(210)));
         TextView t = text(13, false);
-        t.setText("على الجوال (نفس الواي فاي) امسح الرمز أو افتح هذا العنوان:");
+        t.setText("على الجوال (نفس الواي فاي) افتح هذا العنوان أو امسح الرمز:");
         t.setGravity(Gravity.CENTER);
         t.setTextDirection(View.TEXT_DIRECTION_RTL);
         box.addView(t);
         box.addView(addressView(addr));
+        box.addView(qr, new LinearLayout.LayoutParams(dp(170), dp(170)));
         TextView t2 = text(13, false);
         t2.setText("ثم الصق الروابط واضغط «حفظ» — تصل هنا فوراً.");
         t2.setGravity(Gravity.CENTER);
         t2.setTextDirection(View.TEXT_DIRECTION_RTL);
         box.addView(t2);
-        dialog("إضافة روابط من الجوال").setView(box)
+        ScrollView lsv = new ScrollView(this);
+        lsv.addView(box);
+        dialog("إضافة روابط من الجوال").setView(lsv)
+                .setNegativeButton("إلغاء", (d, w) -> stopLinkServer())
                 .setPositiveButton("تم", (d, w) -> {
                     stopLinkServer();
                     showBgSettings();
