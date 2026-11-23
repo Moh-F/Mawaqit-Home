@@ -1179,6 +1179,35 @@ public class MainActivity extends Activity {
     }
 
     /** Weather-card pixel size: scales with the screen width and the "card size" setting. */
+    /** Fine control: value saved in half-dp steps (can be negative). Falls back to the automatic value when not set. */
+    private int fine(String k, int auto) {
+        return prefs.contains(k) ? Math.round(prefs.getInt(k, 0) * getResources().getDisplayMetrics().density / 2f) : auto;
+    }
+
+    private int fineSteps(int px) {
+        return Math.round(px * 2f / getResources().getDisplayMetrics().density);
+    }
+
+    private int gDayIcon() { return fine("w_f_dayicon", tgt(prefs.getInt("w_gap", 2))); }
+
+    private int gIconTemp() { return fine("w_f_icontemp", tgt(prefs.getInt("w_gap", 2))); }
+
+    private int gSub() { return fine("w_f_sub", tgt(prefs.getInt("w_gap", 2))); }
+
+    private int gCol() { return fine("w_f_col", tgt(prefs.getInt("w_colgap", 2))); }
+
+    private int gRow() { return fine("w_f_row", tgt(prefs.getInt("w_rowgap", 1))); }
+
+    private int gIn() { return fine("w_f_in", tgt(prefs.getInt("w_inrow", 1))); }
+
+    private int padL() { return fine("w_f_padl", wpad()); }
+
+    private int padR() { return fine("w_f_padr", wpad()); }
+
+    private int padT() { return fine("w_f_padt", wpad() * 3 / 5); }
+
+    private int padB() { return fine("w_f_padb", wpad() / 2); }
+
     private int wpad() {
         return tgt(prefs.getInt("w_pad", 5));
     }
@@ -1272,7 +1301,7 @@ public class MainActivity extends Activity {
 
     /** Sizes every part of the card from the screen width, so it stays a small tidy rectangle. */
     private void layoutWeather() {
-        weatherCard.setPadding(wpad(), wpad() * 3 / 5, wpad(), wpad() / 2);
+        weatherCard.setPadding(padL(), padT(), padR(), padB());
         setPx(weatherCity, 12);
         setPx(weatherAge, 10);
         LinearLayout.LayoutParams cl0 = (LinearLayout.LayoutParams) weatherCity.getLayoutParams();
@@ -1283,12 +1312,12 @@ public class MainActivity extends Activity {
         weatherAge.setLayoutParams(al0);
         LinearLayout.LayoutParams sp = (LinearLayout.LayoutParams) wSep.getLayoutParams();
         sp.height = Math.max(1, wsc(1));
-        sp.topMargin = tgt(5);
-        sp.bottomMargin = tgt(3);
+        sp.topMargin = fine("w_f_head1", tgt(5));
+        sp.bottomMargin = fine("w_f_head2", tgt(3));
         wSep.setLayoutParams(sp);
         final boolean cols = prefs.getInt("w_layout", 0) == 1;
         final boolean oneLine = !cols && prefs.getInt("w_lines", 1) == 1;
-        final int gap = tgt(prefs.getInt("w_gap", 2));
+        final int gap = gSub();
         wHead = 0;
         if (prefs.getBoolean("w_city", true))
             wHead = Math.max(wHead, (int) Math.ceil(Layout.getDesiredWidth(weatherCity.getText(), weatherCity.getPaint())));
@@ -1330,9 +1359,9 @@ public class MainActivity extends Activity {
             row.setOrientation(oneLine ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
             row.setBaselineAligned(false);
             row.setGravity(cols ? Gravity.CENTER_HORIZONTAL : (oneLine ? Gravity.CENTER_VERTICAL : Gravity.LEFT));
-            int vp = tgt(prefs.getInt("w_rowgap", 1));
-            final int cg = tgt(prefs.getInt("w_colgap", 2));
-            final int ir = tgt(prefs.getInt("w_inrow", 1));
+            int vp = gRow();
+            final int cg = gCol();
+            final int ir = gIn();
             row.setPadding(cols ? cg / 2 : 0, vp, cols ? cg - cg / 2 : 0, vp);
             row.setLayoutParams(cols ? new LinearLayout.LayoutParams(wColW + cg,
                     ViewGroup.LayoutParams.WRAP_CONTENT) : new LinearLayout.LayoutParams(
@@ -1357,10 +1386,10 @@ public class MainActivity extends Activity {
             wSub[i].setGravity(Gravity.CENTER);
             LinearLayout.LayoutParams dl = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : mlp(wRowDay, 0, gap);
+                    : mlp(wRowDay, 0, gDayIcon());
             LinearLayout.LayoutParams il = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    : mlp(wRowIcon, 0, gap);
+                    : mlp(wRowIcon, 0, gIconTemp());
             LinearLayout.LayoutParams tl = cols ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     : new LinearLayout.LayoutParams(wRowTemp, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1395,13 +1424,13 @@ public class MainActivity extends Activity {
     /** Fixed width = padding + day column + icon + temperature column (never depends on text). */
     private int weatherCardWidth() {
         int nd = Math.max(1, Math.min(3, prefs.getInt("w_days", 3)));
-        if (prefs.getInt("w_layout", 0) == 1) return 2 * wpad() + nd * (wColW + tgt(prefs.getInt("w_colgap", 2))) + 2;
+        if (prefs.getInt("w_layout", 0) == 1) return padL() + padR() + nd * (wColW + gCol()) + 2;
         int mainW = (wRowDay > 0 ? wRowDay : wsc(80)) + (wRowIcon > 0 ? wRowIcon : wsc(34))
-                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + 2 * tgt(prefs.getInt("w_gap", 2));
+                + (wRowTemp > 0 ? wRowTemp : wsc(80)) + gDayIcon() + gIconTemp();
         boolean one = prefs.getInt("w_lines", 1) == 1;
-        int body = one ? mainW + (wRowSub > 0 ? wRowSub + 2 * tgt(prefs.getInt("w_gap", 2)) + 4 : 0)
+        int body = one ? mainW + (wRowSub > 0 ? wRowSub + 2 * gSub() + 4 : 0)
                 : Math.max(mainW, wRowSub + 4);
-        return 2 * wpad() + Math.max(body, wHead + 4) + 2;
+        return padL() + padR() + Math.max(body, wHead + 4) + 2;
     }
 
     private int wRowDay, wRowIcon, wRowTemp, wRowSub, wHead, wColW;
@@ -1879,11 +1908,11 @@ public class MainActivity extends Activity {
     }
 
     private static final String[] TOPIC_NAMES = {"طبيعة ومناظر", "غيوم وسماء", "بحر وماء", "غابات وجبال",
-            "مدن ليلاً", "نجوم وفضاء", "صحراء", "شلالات وأنهار", "🕌 إسلامي متنوع", "🕌 مساجد",
+            "مدن ليلاً", "نجوم وفضاء", "صحراء", "شلالات وأنهار", "🔥 مدفأة ونار", "🕌 إسلامي متنوع", "🕌 مساجد",
             "🕋 الكعبة ومكة", "🕌 المدينة المنورة", "🌙 رمضان والهلال"};
     private static final String[] TOPIC_Q = {"nature landscape", "clouds sky timelapse", "ocean sea waves",
             "forest mountains", "city night", "stars night sky milky way", "desert dunes", "waterfall river",
-            "islamic mix", "mosque", "kaaba mecca", "medina mosque", "ramadan crescent moon"};
+            "fireplace fire", "islamic mix", "mosque", "kaaba mecca", "medina mosque", "ramadan crescent moon"};
 
     private void showBgSettings() {
         final List<String> l = new ArrayList<>();
@@ -2028,6 +2057,14 @@ public class MainActivity extends Activity {
                     .setNegativeButton("إلغاء", (d, w) -> showBgSettings()).show();
         });
         if (vid) {
+            l.add("🔊  صوت الفيديو:  " + (prefs.getInt("bg_vol", 0) == 0 ? "صامت" : prefs.getInt("bg_vol", 0) + "%"));
+            a.add(() -> numberDialog("صوت الفيديو (خفيف = 5–15%)", "bg_vol", 0, 0, 100, "%", "صامت", () -> {
+                float v = prefs.getInt("bg_vol", 0) / 100f;
+                for (int i = 0; i < 2; i++) try {
+                    if (vmp[i] != null) vmp[i].setVolume(v, v);
+                } catch (Exception ignored) {
+                }
+            }, this::showBgSettings, this::showBgSettings));
             l.add("🌊  حركة هادئة مستمرة (تقريب بطيء):  " + (prefs.getBoolean("bg_drift", true) ? "نعم" : "لا"));
             a.add(() -> {
                 prefs.edit().putBoolean("bg_drift", !prefs.getBoolean("bg_drift", true)).apply();
@@ -4528,6 +4565,39 @@ public class MainActivity extends Activity {
         return "مخصص (" + x + "% , " + y + "%)";
     }
 
+    /** Pixel-level spacing of every part of the weather card (steps of half a dp, negative values allowed). */
+    private void showWeatherFine() {
+        final String[][] items = {
+                {"w_f_dayicon", "اسم اليوم ↔ الأيقونة"}, {"w_f_icontemp", "الأيقونة ↔ الحرارة"},
+                {"w_f_sub", "الحرارة ↔ التفاصيل (مطر/رياح…)"}, {"w_f_col", "بين أعمدة الأيام"},
+                {"w_f_row", "بين صفوف الأيام"}, {"w_f_in", "بين الأسطر داخل اليوم"},
+                {"w_f_head1", "تحت المدينة (فوق الخط)"}, {"w_f_head2", "تحت الخط (فوق الأيام)"},
+                {"w_f_padt", "هامش البطاقة: أعلى"}, {"w_f_padb", "هامش البطاقة: أسفل"},
+                {"w_f_padl", "هامش البطاقة: يسار"}, {"w_f_padr", "هامش البطاقة: يمين"}};
+        final int[] autoVals = {fineSteps(gDayIcon()), fineSteps(gIconTemp()), fineSteps(gSub()), fineSteps(gCol()),
+                fineSteps(gRow()), fineSteps(gIn()), fineSteps(tgt(5)), fineSteps(tgt(3)), fineSteps(padT()),
+                fineSteps(padB()), fineSteps(padL()), fineSteps(padR())};
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showWeatherFine;
+        for (int i = 0; i < items.length; i++) {
+            final int idx = i;
+            final String key = items[i][0];
+            l.add(items[i][1] + ":  " + (prefs.contains(key) ? prefs.getInt(key, 0) : "تلقائي (" + autoVals[i] + ")"));
+            a.add(() -> numberDialog(items[idx][1] + "  (سالب = تداخل وتقريب أكثر)", key, autoVals[idx], -40, 120,
+                    "", null, this::layoutWeather, back, back));
+        }
+        l.add("↺  إعادة كل القيم الدقيقة إلى التلقائي");
+        a.add(() -> {
+            SharedPreferences.Editor ed = prefs.edit();
+            for (String[] it : items) ed.remove(it[0]);
+            ed.apply();
+            layoutWeather();
+            showWeatherFine();
+        });
+        menu("🎛 ضبط دقيق لمسافات البطاقة", l, a, this::showWeatherSettings);
+    }
+
     private void showWeatherSettings() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
@@ -4538,6 +4608,8 @@ public class MainActivity extends Activity {
             applyWeatherStyle();
             showWeatherSettings();
         });
+        l.add("🎛  ضبط دقيق لكل مسافة في البطاقة (بكسل بكسل، حتى التداخل)");
+        a.add(this::showWeatherFine);
         l.add("📌  موضع البطاقة:  " + weatherPosName());
         a.add(() -> choice("موضع البطاقة",
                 new String[]{"أعلى اليمين", "أعلى اليسار", "أسفل اليمين", "أسفل اليسار",
@@ -5600,7 +5672,7 @@ public class MainActivity extends Activity {
             mp.setDataSource(url);
             mp.setSurface(new android.view.Surface(vst[slot]));
             mp.setLooping(false);
-            mp.setVolume(0f, 0f);
+            mp.setVolume(prefs.getInt("bg_vol", 0) / 100f, prefs.getInt("bg_vol", 0) / 100f);
             final boolean[] shown = {false};
             final Runnable reveal = () -> {
                 if (shown[0] || vmp[slot] != mp) return;
