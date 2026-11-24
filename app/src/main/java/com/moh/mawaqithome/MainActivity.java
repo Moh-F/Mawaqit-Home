@@ -1542,8 +1542,16 @@ public class MainActivity extends Activity {
     }
 
     private void updateWeatherHeader() {
-        weatherCity.setText("📍 " + (manualLocation() ? "الموقع: " : "مدينتك الحالية: ")
+        boolean two = prefs.getInt("w_city_lines", 1) == 2;
+        weatherCity.setText("📍 " + (manualLocation() ? "الموقع:" : "مدينتك الحالية:") + (two ? "\n" : " ")
                 + currentCity());
+        weatherCity.setSingleLine(false);
+        weatherCity.setMaxLines(two ? 2 : 1);
+        weatherCity.setEllipsize(null);
+        int ca = prefs.getInt("w_city_align", 1);              // 0 right, 1 centre, 2 left
+        int g = ca == 0 ? Gravity.RIGHT : ca == 2 ? Gravity.LEFT : Gravity.CENTER_HORIZONTAL;
+        weatherCity.setGravity(g);
+        weatherAge.setGravity(g);
     }
 
     /** "اليوم: 11/19" - the date is lighter and a little smaller. */
@@ -4670,9 +4678,90 @@ public class MainActivity extends Activity {
     }
 
     /** Menu: where does this sound come from? */
+    /** Lists audio files stored in the repo folder audio/<dir>/ (GitHub API) and downloads the chosen one. */
+    private void showLibrarySounds(final String dir, final TextCb cb, final Runnable back) {
+        toast("جارٍ جلب قائمة الأصوات من GitHub…");
+        new Thread(() -> {
+            final List<String[]> items = new ArrayList<>();
+            String err = null;
+            try {
+                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(
+                        "https://api.github.com/repos/Moh-F/Mawaqit-Home/contents/audio/" + dir + "?ref=main").openConnection();
+                h.setRequestProperty("User-Agent", "MawaqitHome");
+                h.setRequestProperty("Accept", "application/vnd.github+json");
+                h.setConnectTimeout(12000);
+                h.setReadTimeout(20000);
+                java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+                try (java.io.InputStream in = h.getInputStream()) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+                }
+                org.json.JSONArray ar = new org.json.JSONArray(b.toString("UTF-8"));
+                for (int i = 0; i < ar.length(); i++) {
+                    org.json.JSONObject o = ar.getJSONObject(i);
+                    String nm = o.optString("name");
+                    if (!nm.toLowerCase().matches(".*\\.(mp3|ogg|m4a|wav|aac)$")) continue;
+                    items.add(new String[]{nm, o.optString("download_url")});
+                }
+            } catch (Exception e) {
+                err = e.toString();
+            }
+            final String ferr = err;
+            runOnUiThread(() -> {
+                if (items.isEmpty()) {
+                    toast(ferr != null ? "تعذّر جلب القائمة: " + ferr : "لا توجد ملفات بعد في مجلد " + dir + " بالمستودع");
+                    back.run();
+                    return;
+                }
+                final String[] names = new String[items.size()];
+                for (int i = 0; i < names.length; i++)
+                    names[i] = items.get(i)[0].replaceAll("\\.[^.]+$", "").replace('_', ' ').replace('-', ' ');
+                choice("أصوات مكتبة اللانشر (GitHub)", names, -1, i -> downloadLibrarySound(items.get(i)[0], items.get(i)[1], cb),
+                        back);
+            });
+        }, "audiolib").start();
+    }
+
+    private void downloadLibrarySound(final String name, final String url, final TextCb cb) {
+        final File dir = new File(getFilesDir(), "audio/lib");
+        dir.mkdirs();
+        final File f = new File(dir, name.replaceAll("[^A-Za-z0-9._-]", "_"));
+        if (f.exists() && f.length() > 1000) {
+            cb.on(f.getAbsolutePath());
+            return;
+        }
+        toast("جارٍ التحميل…");
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                h.setRequestProperty("User-Agent", "MawaqitHome");
+                h.setConnectTimeout(12000);
+                h.setReadTimeout(60000);
+                File tmp = new File(dir, f.getName() + ".part");
+                try (java.io.InputStream in = h.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                    byte[] buf = new byte[32768];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+                if (!tmp.renameTo(f)) throw new java.io.IOException("rename failed");
+                runOnUiThread(() -> cb.on(f.getAbsolutePath()));
+            } catch (Exception e) {
+                AppLog.error("AUDIO", "library download failed", e);
+                runOnUiThread(() -> toast("تعذّر التحميل: " + e.getMessage()));
+            }
+        }, "audiodl").start();
+    }
+
     private void pickAudioSource(final String title, final TextCb cb, final Runnable back) {
+        pickAudioSource(title, cb, back, "adhan");
+    }
+
+    private void pickAudioSource(final String title, final TextCb cb, final Runnable back, final String lib) {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
+        l.add("📚  من مكتبة اللانشر (ملفات المستودع على GitHub)");
+        a.add(() -> showLibrarySounds(lib, cb, () -> pickAudioSource(title, cb, back, lib)));
         l.add("📱  رفع من الجوال / اللابتوب (رمز QR)");
         a.add(() -> audioFileUpload(cb));
         l.add("📂  اختيار من ملفات الشاشة (إن وُجد مستعرض ملفات)");
@@ -4727,7 +4816,7 @@ public class MainActivity extends Activity {
         a.add(() -> pickAudioSource("صوت الدعاء بعد الأذان", v -> {
             prefs.edit().putString("adhan_dua_url", v).apply();
             showAdhanSettings();
-        }, this::showAdhanSettings));
+        }, this::showAdhanSettings, "dua"));
         if (!prefs.getString("adhan_dua_url", "").isEmpty()) {
             l.add("🗑  إزالة صوت الدعاء");
             a.add(() -> {
@@ -5254,6 +5343,17 @@ public class MainActivity extends Activity {
         l.add("↕  التباعد بين صفوف الأيام:  " + prefs.getInt("w_rowgap", 1) + "  (0 = ملتصقة)");
         a.add(() -> numberDialog("التباعد بين الأيام (أقل = أقرب)", "w_rowgap", 1, 0, 30, "", null,
                 this::layoutWeather, back, back));
+        l.add("📍  سطر المدينة:  " + (prefs.getInt("w_city_lines", 1) == 2 ? "سطران" : "سطر واحد") + " • "
+                + new String[]{"يمين", "وسط", "يسار"}[prefs.getInt("w_city_align", 1) % 3]);
+        a.add(() -> choice("سطر «مدينتك الحالية» واسم المدينة", new String[]{"سطر واحد — وسط", "سطر واحد — يمين",
+                "سطر واحد — يسار", "سطران (العنوان ثم اسم المدينة) — وسط", "سطران — يمين", "سطران — يسار"},
+                (prefs.getInt("w_city_lines", 1) - 1) * 3 + (new int[]{1, 0, 2}[prefs.getInt("w_city_align", 1) % 3] == 0 ? 0
+                        : prefs.getInt("w_city_align", 1) == 0 ? 1 : 2), i -> {
+                    prefs.edit().putInt("w_city_lines", i / 3 + 1).putInt("w_city_align", new int[]{1, 0, 2}[i % 3]).apply();
+                    updateWeatherHeader();
+                    layoutWeather();
+                    showWeatherSettings();
+                }, back));
         l.add("🔠  حجم الخط داخل البطاقة:  " + prefs.getInt("w_font", 100) + "%");
         a.add(() -> numberDialog("حجم الخط داخل البطاقة (تصغير/تكبير)", "w_font", 100, 50, 250, "%", null,
                 this::layoutWeather, back, back));

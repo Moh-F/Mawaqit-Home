@@ -53,6 +53,10 @@ final class AdhanSources {
                         if (em != null && em.optJSONObject("LicenseShortName") != null)
                             lic = em.getJSONObject("LicenseShortName").optString("value");
                         String title = pg.optString("title", "").replaceFirst("^File:", "");
+                        if (!title.toLowerCase().matches("(?s).*(adhan|athan|azan|adhaan|ezan|call to prayer|أذان|اذان|تكبير).*")
+                                || title.toLowerCase().matches("(?s).*(lessons?|learn|pronunciation|recording of|word).*")
+                                || title.length() > 70)
+                            continue;
                         out.add(new String[]{title, ii.getString("url"), lic});
                     }
                 }
