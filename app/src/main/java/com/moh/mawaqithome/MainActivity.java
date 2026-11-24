@@ -1417,6 +1417,9 @@ public class MainActivity extends Activity {
             wIcon[i].setIncludeFontPadding(false);
             wTemp[i].setIncludeFontPadding(false);
             wSub[i].setIncludeFontPadding(false);
+            wDay[i].setSingleLine(false);                    // name and date on two lines in column mode
+            wDay[i].setMaxLines(cols ? 2 : 1);
+            wDay[i].setEllipsize(null);
             wSub[i].setSingleLine(false);
             wSub[i].setMaxLines(oneLine ? 1 : 3);
             wSub[i].setGravity(Gravity.CENTER);
@@ -5211,8 +5214,9 @@ public class MainActivity extends Activity {
         l.add("🔆  شفافية البطاقة:  " + prefs.getInt("w_alpha", 55) + "%  (0 = شفافة تماماً)");
         a.add(() -> numberDialog("شفافية البطاقة (0% = تذوب في الصفحة)", "w_alpha", 55, 0, 100, "%", null,
                 this::applyWeatherStyle, back, back));
-        l.add("▤  شكل العرض:  " + (prefs.getInt("w_layout", 0) == 1 ? "أعمدة (أفقي)" : "صفوف (عمودي)"));
-        a.add(() -> choice("شكل عرض الأيام", new String[]{"صفوف: كل يوم في سطر", "أعمدة: الأيام الثلاثة جنب بعض"},
+        l.add("▤  شكل العرض:  " + (prefs.getInt("w_layout", 0) == 1 ? "كل يوم عمود (التفاصيل فوق بعضها)" : "كل يوم صف (التفاصيل بجانب بعضها)"));
+        a.add(() -> choice("شكل عرض الأيام", new String[]{"كل يوم في صف أفقي — الأجزاء بجانب بعضها (أعمدة محاذاة)",
+                "كل يوم في عمود — الأيام الثلاثة جنب بعض والأجزاء فوق بعضها"},
                 prefs.getInt("w_layout", 0), i -> {
                     prefs.edit().putInt("w_layout", i).apply();
                     layoutWeather();
