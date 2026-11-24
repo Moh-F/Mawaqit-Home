@@ -617,6 +617,7 @@ public class MainActivity extends Activity {
         AppLog.info("APP", "created v" + Updater.currentName(this) + " url=" + url);
 
         if (getIntent().getBooleanExtra("wake", false)) doWake();
+        handler.postDelayed(() -> handleAdhanIntent(getIntent()), 1500L);
     }
 
     @Override
@@ -627,6 +628,7 @@ public class MainActivity extends Activity {
         resolveUrl(intent);
         if (!url.equals(old)) webView.loadUrl(url);
         if (intent.getBooleanExtra("wake", false)) doWake();
+        handleAdhanIntent(intent);
     }
 
     @Override
@@ -3886,6 +3888,8 @@ public class MainActivity extends Activity {
         a.add(this::showStatus);
         l.add("🔗  رابط الصفحة");
         a.add(this::promptUrl);
+        l.add("🕌  الأذان وصوت المؤذن:  " + onOff(prefs.getBoolean("adhan_on", false)));
+        a.add(this::showAdhanSettings);
         l.add("🌙  حماية الشاشة (الاختفاء والتعتيم والنوم)");
         a.add(this::showSaverSettings);
         l.add("☰  الشريط والتصنيفات والقائمة");
@@ -4341,6 +4345,349 @@ public class MainActivity extends Activity {
                 .setPositiveButton("حفظ", (d, w) -> onOk.on(et.getText().toString().trim()))
                 .setNeutralButton("📱 من الجوال", (d, w) -> phoneInput(pTitle, et.getText().toString(), onOk))
                 .setNegativeButton("إلغاء", null).show();
+    }
+
+    // ------------------------------------------------------------------ Adhan
+
+    private android.media.MediaPlayer adhanMp, duaMp;
+    private TextView duaView;
+    private boolean adhanRunning, adhanReturn, duaTimeUp, duaAudioDone, adhanEndScheduled;
+    private static final String DUA_TEXT = "اللَّهُمَّ رَبَّ هَذِهِ الدَّعْوَةِ التَّامَّةِ، وَالصَّلَاةِ الْقَائِمَةِ،\n"
+            + "آتِ مُحَمَّدًا الْوَسِيلَةَ وَالْفَضِيلَةَ،\nوَابْعَثْهُ مَقَامًا مَحْمُودًا الَّذِي وَعَدْتَهُ";
+    private static final String[] PRAYER_NAMES = {"الفجر", "الظهر", "العصر", "المغرب", "العشاء"};
+
+    private void handleAdhanIntent(Intent in) {
+        if (in == null) return;
+        int idx = in.getIntExtra("adhan", -1);
+        if (idx < 0) return;
+        long at = in.getLongExtra("adhan_at", 0L);
+        in.removeExtra("adhan");
+        if (System.currentTimeMillis() - at > 5 * 60_000L) return;        // stale intent (e.g. app restarted later)
+        startAdhan(idx, false);
+    }
+
+    private void startAdhan(int idx, boolean test) {
+        if (adhanRunning) return;
+        if (!test) {
+            if (!prefs.getBoolean("adhan_on", false)) return;
+            String key = new java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(new java.util.Date())
+                    + "-" + idx;
+            if (key.equals(prefs.getString("adhan_last", ""))) return;
+            prefs.edit().putString("adhan_last", key).apply();
+        }
+        adhanReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test;
+        adhanRunning = true;
+        adhanEndScheduled = false;
+        duaTimeUp = false;
+        duaAudioDone = false;
+        AppLog.info("ADHAN", "start " + (idx >= 0 && idx < 5 ? PRAYER_NAMES[idx] : "test") + " returnToApp=" + adhanReturn);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        lastInput = SystemClock.elapsedRealtime();
+        sleepTried = false;
+        pendingReturn = null;
+        try {
+            if (topDlg != null) topDlg.dismiss();
+        } catch (Exception ignored) {
+        }
+        if (railOpen) closeRail(false);
+        if (sizeH > 0) applyStage(0, false);
+        pauseNativeVideo();
+        String u = prefs.getString("adhan_url", "");
+        if (u.isEmpty()) {
+            toast("لم تُحدَّد نغمة أذان — الإعدادات ← الأذان");
+            afterAdhan();
+            return;
+        }
+        try {
+            adhanMp = new android.media.MediaPlayer();
+            adhanMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+            adhanMp.setDataSource(u);
+            float v = prefs.getInt("adhan_vol", 80) / 100f;
+            adhanMp.setVolume(v, v);
+            adhanMp.setOnPreparedListener(m -> {
+                AppLog.info("ADHAN", "playing, length " + m.getDuration() / 1000 + " s");
+                m.start();
+            });
+            adhanMp.setOnCompletionListener(m -> afterAdhan());
+            adhanMp.setOnErrorListener((m, what, extra) -> {
+                AppLog.info("ADHAN", "audio error what=" + what + " extra=" + extra + " url=" + u);
+                toast("تعذّر تشغيل صوت الأذان — جرّب رابطاً آخر");
+                afterAdhan();
+                return true;
+            });
+            adhanMp.prepareAsync();
+            handler.postDelayed(adhanGuard, 10 * 60_000L);
+        } catch (Exception e) {
+            AppLog.error("ADHAN", "play failed", e);
+            afterAdhan();
+        }
+    }
+
+    private final Runnable adhanGuard = () -> {
+        if (adhanRunning) {
+            AppLog.info("ADHAN", "guard timeout");
+            endAdhan();
+        }
+    };
+
+    private void releaseAdhanMp() {
+        try {
+            if (adhanMp != null) adhanMp.release();
+        } catch (Exception ignored) {
+        }
+        adhanMp = null;
+    }
+
+    private void afterAdhan() {
+        if (!adhanRunning) return;
+        releaseAdhanMp();
+        if (duaView != null || duaMp != null) return;                    // already in the du'a phase
+        long minMs = Math.max(1, prefs.getInt("adhan_dua_secs", 20)) * 1000L;
+        boolean text = prefs.getBoolean("adhan_dua_show", true);
+        String au = prefs.getString("adhan_dua_url", "");
+        if (text) showDuaText();
+        if (!au.isEmpty()) {
+            try {
+                duaMp = new android.media.MediaPlayer();
+                duaMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+                duaMp.setDataSource(au);
+                float v = prefs.getInt("adhan_vol", 80) / 100f;
+                duaMp.setVolume(v, v);
+                duaMp.setOnPreparedListener(m -> m.start());
+                duaMp.setOnCompletionListener(m -> {
+                    duaAudioDone = true;
+                    duaCheck();
+                });
+                duaMp.setOnErrorListener((m, w, e) -> {
+                    duaAudioDone = true;
+                    duaCheck();
+                    return true;
+                });
+                duaMp.prepareAsync();
+            } catch (Exception e) {
+                duaAudioDone = true;
+            }
+        } else {
+            duaAudioDone = true;
+        }
+        if (!text && au.isEmpty()) minMs = 0L;
+        handler.postDelayed(() -> {
+            duaTimeUp = true;
+            duaCheck();
+        }, minMs);
+    }
+
+    private void duaCheck() {
+        if (!adhanRunning || adhanEndScheduled || !duaTimeUp || !duaAudioDone) return;
+        adhanEndScheduled = true;
+        handler.postDelayed(this::endAdhan, Math.max(0, prefs.getInt("adhan_wait", 3)) * 1000L);
+    }
+
+    private void showDuaText() {
+        duaView = new TextView(this);
+        duaView.setText(DUA_TEXT);
+        duaView.setTextColor(Color.WHITE);
+        duaView.setTypeface(tf(true));
+        duaView.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(26));
+        duaView.setGravity(Gravity.CENTER);
+        duaView.setTextDirection(View.TEXT_DIRECTION_RTL);
+        duaView.setLineSpacing(0f, 1.3f);
+        duaView.setPadding(dp(26), dp(18), dp(26), dp(18));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0xE6081510);
+        g.setCornerRadius(dp(22));
+        g.setStroke(Math.max(1, dp(2)), 0xFFF4C95D);
+        duaView.setBackground(g);
+        duaView.setElevation(dp(20));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        duaView.setMaxWidth(Math.round(sizeW * 0.85f));
+        root.addView(duaView, lp);
+    }
+
+    private void endAdhan() {
+        handler.removeCallbacks(adhanGuard);
+        releaseAdhanMp();
+        try {
+            if (duaMp != null) duaMp.release();
+        } catch (Exception ignored) {
+        }
+        duaMp = null;
+        if (duaView != null) {
+            root.removeView(duaView);
+            duaView = null;
+        }
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        adhanRunning = false;
+        AppLog.info("ADHAN", "finished; returning to previous app: " + adhanReturn);
+        resumeNativeVideo();
+        if (adhanReturn) moveTaskToBack(true);
+    }
+
+    private void showAdhanSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showAdhanSettings;
+        l.add("🕌  تشغيل الأذان وقت الصلاة:  " + onOff(prefs.getBoolean("adhan_on", false)));
+        a.add(() -> {
+            prefs.edit().putBoolean("adhan_on", !prefs.getBoolean("adhan_on", false)).apply();
+            WakeScheduler.scheduleAdhan(this);
+            showAdhanSettings();
+        });
+        l.add("📿  الصلوات المفعّلة:  " + maskNames(prefs.getInt("adhan_mask", 31)));
+        a.add(() -> {
+            final int cur = prefs.getInt("adhan_mask", 31);
+            final boolean[] on = new boolean[5];
+            for (int i = 0; i < 5; i++) on[i] = (cur & (1 << i)) != 0;
+            dialog("الصلوات التي يُرفع لها الأذان").setMultiChoiceItems(PRAYER_NAMES, on, null)
+                    .setPositiveButton("حفظ", (d, w) -> {
+                        int v = 0;
+                        for (int i = 0; i < 5; i++) if (on[i]) v |= 1 << i;
+                        prefs.edit().putInt("adhan_mask", v).apply();
+                        WakeScheduler.scheduleAdhan(this);
+                        showAdhanSettings();
+                    }).setNegativeButton("إلغاء", (d, w) -> showAdhanSettings()).show();
+        });
+        l.add("🎙  صوت المؤذن:  " + adhanName());
+        a.add(this::showAdhanSound);
+        l.add("🔊  مستوى صوت الأذان:  " + prefs.getInt("adhan_vol", 80) + "%  (ويُضبط صوت التلفاز أيضاً)");
+        a.add(() -> numberDialog("مستوى صوت الأذان", "adhan_vol", 80, 5, 100, "%", null, null, back, back));
+        l.add("🤲  دعاء بعد الأذان (نصاً على الشاشة):  " + onOff(prefs.getBoolean("adhan_dua_show", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("adhan_dua_show", !prefs.getBoolean("adhan_dua_show", true)).apply();
+            showAdhanSettings();
+        });
+        l.add("⏱  مدة عرض الدعاء:  " + prefs.getInt("adhan_dua_secs", 20) + " ث");
+        a.add(() -> numberDialog("مدة عرض الدعاء بالثواني", "adhan_dua_secs", 20, 3, 120, " ث", null, null, back, back));
+        l.add("🔉  صوت الدعاء (رابط mp3 اختياري):  " + (prefs.getString("adhan_dua_url", "").isEmpty() ? "بلا صوت" : "محدد"));
+        a.add(() -> promptText("رابط ملف صوت الدعاء (mp3) — اتركه فارغاً لإلغائه", "https://…/dua.mp3",
+                prefs.getString("adhan_dua_url", ""), v -> {
+                    prefs.edit().putString("adhan_dua_url", v).apply();
+                    showAdhanSettings();
+                }));
+        l.add("⏳  الانتظار بعد الدعاء قبل العودة:  " + prefs.getInt("adhan_wait", 3) + " ث");
+        a.add(() -> numberDialog("الانتظار بعد الدعاء (ثوانٍ)", "adhan_wait", 3, 0, 60, " ث", null, null, back, back));
+        l.add("↩  العودة للتطبيق/الفيديو السابق بعد الانتهاء:  " + onOff(prefs.getBoolean("adhan_return", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("adhan_return", !prefs.getBoolean("adhan_return", true)).apply();
+            showAdhanSettings();
+        });
+        l.add("▶  تجربة الأذان الآن (كاملاً مع الدعاء)");
+        a.add(() -> {
+            toast("بدأت التجربة");
+            startAdhan(-1, true);
+        });
+        long nx = prefs.getLong("next_adhan", 0L);
+        int ni = prefs.getInt("next_adhan_idx", -1);
+        l.add("ℹ  الأذان القادم:  " + (!prefs.getBoolean("adhan_on", false) || nx == 0L || ni < 0 ? "—"
+                : PRAYER_NAMES[ni] + " " + new java.text.SimpleDateFormat("EEE HH:mm", java.util.Locale.getDefault())
+                .format(new java.util.Date(nx))));
+        a.add(this::showAdhanSettings);
+        menu("🕌 الأذان", l, a, this::showLauncherSettings);
+    }
+
+    private String maskNames(int m) {
+        if (m == 31) return "الخمس";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 5; i++) if ((m & (1 << i)) != 0) sb.append(sb.length() > 0 ? "، " : "").append(PRAYER_NAMES[i]);
+        return sb.length() == 0 ? "لا شيء" : sb.toString();
+    }
+
+    private org.json.JSONArray adhanList() {
+        try {
+            return new org.json.JSONArray(prefs.getString("adhan_list", "[]"));
+        } catch (Exception e) {
+            return new org.json.JSONArray();
+        }
+    }
+
+    private String adhanName() {
+        String u = prefs.getString("adhan_url", "");
+        if (u.isEmpty()) return "غير محدد";
+        org.json.JSONArray ar = adhanList();
+        for (int i = 0; i < ar.length(); i++)
+            if (u.equals(ar.optJSONObject(i).optString("u"))) return ar.optJSONObject(i).optString("n");
+        return "مخصص";
+    }
+
+    private void addAdhan(String name, String url) {
+        try {
+            org.json.JSONArray ar = adhanList();
+            org.json.JSONObject o = new org.json.JSONObject();
+            o.put("n", name.length() > 60 ? name.substring(0, 60) : name);
+            o.put("u", url);
+            ar.put(o);
+            prefs.edit().putString("adhan_list", ar.toString()).putString("adhan_url", url).apply();
+        } catch (Exception e) {
+            AppLog.error("ADHAN", "save list", e);
+        }
+    }
+
+    private void showAdhanSound() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final org.json.JSONArray ar = adhanList();
+        final String cur = prefs.getString("adhan_url", "");
+        for (int i = 0; i < ar.length(); i++) {
+            final org.json.JSONObject o = ar.optJSONObject(i);
+            if (o == null) continue;
+            l.add((o.optString("u").equals(cur) ? "✔  " : "○  ") + o.optString("n"));
+            a.add(() -> {
+                prefs.edit().putString("adhan_url", o.optString("u")).apply();
+                toast("اختير: " + o.optString("n"));
+                showAdhanSound();
+            });
+        }
+        l.add("🔎  بحث عن أذان مجاني (ويكيميديا كومنز)");
+        a.add(() -> adhanSearch("adhan"));
+        l.add("🔎  بحث بكلمة أخرى (azan، مكة، المدينة، قارئ…)");
+        a.add(() -> promptText("كلمة البحث عن ملف صوتي", "adhan makkah", "adhan", this::adhanSearch));
+        l.add("➕  إضافة رابط mp3 / ogg خاص (يمكن من الجوال)");
+        a.add(() -> promptText("رابط مباشر لملف الأذان (mp3 أو ogg)", "https://…/adhan.mp3", "", v -> {
+            if (!v.startsWith("http")) {
+                toast("الرابط لازم يبدأ بـ http");
+                showAdhanSound();
+                return;
+            }
+            String nm = v.substring(v.lastIndexOf('/') + 1);
+            addAdhan(nm.isEmpty() ? "أذان مخصص" : nm, v);
+            showAdhanSound();
+        }));
+        if (!cur.isEmpty()) {
+            l.add("🗑  حذف المحدد من القائمة");
+            a.add(() -> {
+                try {
+                    org.json.JSONArray out = new org.json.JSONArray();
+                    for (int i = 0; i < ar.length(); i++)
+                        if (!cur.equals(ar.optJSONObject(i).optString("u"))) out.put(ar.get(i));
+                    prefs.edit().putString("adhan_list", out.toString()).putString("adhan_url", "").apply();
+                } catch (Exception ignored) {
+                }
+                showAdhanSound();
+            });
+        }
+        menu("🎙 صوت المؤذن", l, a, this::showAdhanSettings);
+    }
+
+    private void adhanSearch(final String q) {
+        toast("جارٍ البحث…");
+        AdhanSources.search(q, (found, err) -> runOnUiThread(() -> {
+            if (found.isEmpty()) {
+                toast(err != null ? "تعذّر البحث: " + err : "لا نتائج لهذه الكلمة");
+                showAdhanSound();
+                return;
+            }
+            final String[] names = new String[found.size()];
+            for (int i = 0; i < names.length; i++)
+                names[i] = found.get(i)[0] + (found.get(i)[2].isEmpty() ? "" : "  [" + found.get(i)[2] + "]");
+            choice("اختر الملف (سيُضاف للقائمة ويُحدَّد)", names, -1, i -> {
+                addAdhan(found.get(i)[0], found.get(i)[1]);
+                toast("أُضيف وحُدّد — جرّبه من «تجربة الأذان الآن»");
+                showAdhanSettings();
+            }, this::showAdhanSound);
+        }));
     }
 
     private void promptUrl() {

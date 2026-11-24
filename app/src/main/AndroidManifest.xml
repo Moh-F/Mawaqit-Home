@@ -41,6 +41,11 @@
             android:name=".WakeReceiver"
             android:exported="false" />
 
+        <!-- Exact prayer minute: plays the adhan -->
+        <receiver
+            android:name=".AdhanReceiver"
+            android:exported="false" />
+
         <!-- Optional: start the launcher after boot -->
         <receiver
             android:name=".BootReceiver"

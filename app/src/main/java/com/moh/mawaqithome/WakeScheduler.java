@@ -67,6 +67,7 @@ public final class WakeScheduler {
      * Returns the alarm time in ms, or 0 if prayer times are not known.
      */
     public static long scheduleNext(Context ctx) {
+        scheduleAdhan(ctx);
         SharedPreferences p = prefs(ctx);
         int[] t = load(p);
         if (t == null) return 0L;
@@ -101,5 +102,48 @@ public final class WakeScheduler {
         }
         p.edit().putLong("next_wake", best).apply();
         return best;
+    }
+
+    /** One exact alarm at the next selected prayer minute (adhan). Re-armed after each firing. */
+    public static void scheduleAdhan(Context ctx) {
+        try {
+            SharedPreferences p = prefs(ctx);
+            AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+            Intent i = new Intent(ctx, AdhanReceiver.class);
+            if (!p.getBoolean("adhan_on", false)) {
+                am.cancel(PendingIntent.getBroadcast(ctx, 8, i, PendingIntent.FLAG_UPDATE_CURRENT));
+                return;
+            }
+            int[] t = load(p);
+            if (t == null) return;
+            int mask = p.getInt("adhan_mask", 31);
+            long now = System.currentTimeMillis();
+            long best = Long.MAX_VALUE;
+            int bi = -1;
+            for (int d = 0; d <= 1; d++) {
+                Calendar c = Calendar.getInstance();
+                c.set(Calendar.HOUR_OF_DAY, 0);
+                c.set(Calendar.MINUTE, 0);
+                c.set(Calendar.SECOND, 0);
+                c.set(Calendar.MILLISECOND, 0);
+                c.add(Calendar.DAY_OF_YEAR, d);
+                for (int k = 0; k < 5; k++) {
+                    if ((mask & (1 << k)) == 0) continue;
+                    long at = c.getTimeInMillis() + (long) t[k] * 60_000L;
+                    if (at > now + 1000L && at < best) {
+                        best = at;
+                        bi = k;
+                    }
+                }
+            }
+            if (bi < 0) return;
+            i.putExtra("idx", bi);
+            PendingIntent pi = PendingIntent.getBroadcast(ctx, 8, i, PendingIntent.FLAG_UPDATE_CURRENT);
+            if (Build.VERSION.SDK_INT >= 23) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, best, pi);
+            else am.setExact(AlarmManager.RTC_WAKEUP, best, pi);
+            p.edit().putLong("next_adhan", best).putInt("next_adhan_idx", bi).apply();
+        } catch (Exception e) {
+            AppLog.error("ADHAN", "schedule failed", e);
+        }
     }
 }
