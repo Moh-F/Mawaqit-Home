@@ -36,6 +36,9 @@ final class PhoneServer {
     }
 
     private ServerSocket ss;
+    /** When set, a POST to ".../up?name=x" streams its body (a whole file, up to 80 MB) into this folder. */
+    volatile java.io.File uploadDir;
+    volatile String lastUpload;
 
     boolean start(final int port, final Handler h) {
         stop();
@@ -47,7 +50,7 @@ final class PhoneServer {
                     try {
                         Socket c = s.accept();
                         try {
-                            c.setSoTimeout(8000);
+                            c.setSoTimeout(60000);
                             InputStream in = c.getInputStream();
                             ByteArrayOutputStream hd = new ByteArrayOutputStream();
                             int b, state = 0;
@@ -65,12 +68,37 @@ final class PhoneServer {
                             for (String line : head.split("\r\n"))
                                 if (line.toLowerCase().startsWith("content-length:"))
                                     len = Integer.parseInt(line.substring(15).trim());
-                            byte[] body = new byte[Math.min(len, 2_000_000)];
-                            int got = 0;
-                            while (got < body.length) {
-                                int n = in.read(body, got, body.length - got);
-                                if (n < 0) break;
-                                got += n;
+                            byte[] body;
+                            if (method.equals("POST") && path.contains("/up?") && uploadDir != null
+                                    && len > 0 && len <= 80_000_000) {
+                                String nm = "";
+                                int q = path.indexOf("name=");
+                                if (q >= 0) nm = java.net.URLDecoder.decode(path.substring(q + 5).split("&")[0], "UTF-8");
+                                String ext = nm.contains(".") ? nm.substring(nm.lastIndexOf('.')).replaceAll("[^A-Za-z0-9.]", "")
+                                        : ".mp3";
+                                if (ext.length() > 6 || ext.length() < 2) ext = ".mp3";
+                                uploadDir.mkdirs();
+                                java.io.File f = new java.io.File(uploadDir, "audio_" + System.currentTimeMillis() + ext);
+                                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f)) {
+                                    byte[] buf = new byte[32768];
+                                    int left = len;
+                                    while (left > 0) {
+                                        int n = in.read(buf, 0, Math.min(buf.length, left));
+                                        if (n < 0) break;
+                                        fo.write(buf, 0, n);
+                                        left -= n;
+                                    }
+                                }
+                                lastUpload = f.getAbsolutePath();
+                                body = new byte[0];
+                            } else {
+                                body = new byte[Math.min(len, 2_000_000)];
+                                int got = 0;
+                                while (got < body.length) {
+                                    int n = in.read(body, got, body.length - got);
+                                    if (n < 0) break;
+                                    got += n;
+                                }
                             }
                             Resp r = h.handle(method, path, body);
                             OutputStream o = c.getOutputStream();

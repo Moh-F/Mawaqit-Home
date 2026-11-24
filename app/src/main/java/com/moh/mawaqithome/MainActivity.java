@@ -258,6 +258,9 @@ public class MainActivity extends Activity {
     private TextView weatherCity, weatherAge;
     private final TextView[] wDay = new TextView[3], wIcon = new TextView[3],
             wTemp = new TextView[3], wSub = new TextView[3];
+    private final LinearLayout[] wFlds = new LinearLayout[3];
+    private final TextView[][] wFld = new TextView[3][5];
+    private final int[] wFldW = new int[5];
     private View wSep;
     private boolean wMove = false;
     private LinearLayout daysBox;
@@ -1282,6 +1285,20 @@ public class MainActivity extends Activity {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             row.addView(wSub[i], new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            wFlds[i] = new LinearLayout(this);
+            wFlds[i].setOrientation(LinearLayout.HORIZONTAL);
+            wFlds[i].setVisibility(View.GONE);
+            for (int k = 0; k < 5; k++) {
+                wFld[i][k] = text(10, false);
+                wFld[i][k].setTextColor(0xE6FFFFFF);
+                wFld[i][k].setGravity(Gravity.CENTER);
+                wFld[i][k].setSingleLine(true);
+                wFld[i][k].setIncludeFontPadding(false);
+                wFlds[i].addView(wFld[i][k], new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            row.addView(wFlds[i], new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             daysBox.addView(row);
         }
 
@@ -1331,13 +1348,30 @@ public class MainActivity extends Activity {
                 setPx(wDay[i], 12);
                 setPx(wTemp[i], 15);
                 setPx(wSub[i], 10);
-                setPx(wIcon[i], 26);
+                setPx(wIcon[i], 26 * prefs.getInt("w_iconsz", 100) / 100f);
                 if (i >= Math.max(1, Math.min(3, prefs.getInt("w_days", 3)))) continue;
                 dW = Math.max(dW, (int) Math.ceil(Layout.getDesiredWidth(wDay[i].getText(), wDay[i].getPaint())));
                 iW = Math.max(iW, (int) Math.ceil(Layout.getDesiredWidth(wIcon[i].getText(), wIcon[i].getPaint())));
                 tW = Math.max(tW, (int) Math.ceil(Layout.getDesiredWidth(wTemp[i].getText(), wTemp[i].getPaint())));
                 if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(wsc(230),
                         (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint()))));
+            }
+            if (oneLine) {                                   // every detail gets its own aligned column
+                int tot = 0, shown = 0;
+                for (int k = 0; k < 5; k++) {
+                    int mw = 0;
+                    for (int i = 0; i < 3 && i < Math.max(1, Math.min(3, prefs.getInt("w_days", 3))); i++) {
+                        setPx(wFld[i][k], 10);
+                        if (wFld[i][k].getText().length() > 0) mw = Math.max(mw, (int) Math.ceil(
+                                Layout.getDesiredWidth(wFld[i][k].getText(), wFld[i][k].getPaint())) + 3);
+                    }
+                    wFldW[k] = mw;
+                    if (mw > 0) {
+                        tot += mw;
+                        shown++;
+                    }
+                }
+                subW = tot + Math.max(0, shown - 1) * gSub();
             }
             if (cols) subW = Math.min(subW, Math.max(Math.max(dW, Math.max(iW, tW)) + wsc(14), wsc(50)));   // sub text wraps instead of widening the column
             wRowSub = subW;
@@ -1372,7 +1406,7 @@ public class MainActivity extends Activity {
             main.setBaselineAligned(true);                 // day, icon and temperature share one baseline
             main.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.NO_GRAVITY);
             setPx(wDay[i], 12);
-            setPx(wIcon[i], 26);
+            setPx(wIcon[i], 26 * prefs.getInt("w_iconsz", 100) / 100f);
             setPx(wTemp[i], 15);
             setPx(wSub[i], 10);
             int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
@@ -1412,6 +1446,23 @@ public class MainActivity extends Activity {
             sl2.topMargin = oneLine ? 0 : ir;
             sl2.bottomMargin = lead(wSub[i]);
             wSub[i].setLayoutParams(sl2);
+            wFlds[i].setVisibility(oneLine ? View.VISIBLE : View.GONE);
+            if (oneLine) {
+                wSub[i].setVisibility(View.GONE);
+                LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                fl.leftMargin = fl.rightMargin = gap;
+                wFlds[i].setLayoutParams(fl);
+                boolean firstShown = true;
+                for (int k = 0; k < 5; k++) {
+                    wFld[i][k].setVisibility(wFldW[k] > 0 ? View.VISIBLE : View.GONE);
+                    LinearLayout.LayoutParams kp = new LinearLayout.LayoutParams(Math.max(1, wFldW[k]),
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+                    if (wFldW[k] > 0 && !firstShown) kp.leftMargin = gSub();
+                    if (wFldW[k] > 0) firstShown = false;
+                    wFld[i][k].setLayoutParams(kp);
+                }
+            }
         }
         FrameLayout.LayoutParams clp = (FrameLayout.LayoutParams) weatherCard.getLayoutParams();
         clp.width = weatherCardWidth();
@@ -1529,7 +1580,12 @@ public class MainActivity extends Activity {
             if (ff && i == 0 && weather.curFeels > -900)
                 sb.append(sb.length() > 0 ? sep : "").append("🌡 يُحسّ ").append(weather.curFeels).append("°");
             wSub[i].setText(sb);
-            wSub[i].setVisibility(sb.length() == 0 ? View.GONE : View.VISIBLE);
+            wSub[i].setVisibility(sb.length() == 0 || (prefs.getInt("w_layout", 0) != 1
+                    && prefs.getInt("w_lines", 1) == 1) ? View.GONE : View.VISIBLE);
+            String[] ft = {fh ? "💧 " + (hum >= 0 ? hum + "%" : "—") : "", fr && d.rain >= 0 ? "🌧 " + d.rain + "%" : "",
+                    fw && wind >= 0 ? "💨 " + wind + " km/h" : "", fu && d.uv >= 0 ? "☀ UV " + d.uv : "",
+                    ff && i == 0 && weather.curFeels > -900 ? "🌡 يُحسّ " + weather.curFeels + "°" : ""};
+            for (int k = 0; k < 5; k++) wFld[i][k].setText(ft[k]);
             if (i == 0) {
                 wIcon[i].setText(weather.curIcon);
                 wTemp[i].setText(weather.curTemp + "°");
@@ -4525,6 +4581,110 @@ public class MainActivity extends Activity {
         if (adhanReturn) moveTaskToBack(true);
     }
 
+    // ---- audio file from the phone/laptop (upload) or from the device's own file picker
+    private TextCb audioPicked;
+
+    private void audioFileUpload(final TextCb cb) {
+        final String ip = localIp();
+        if (ip == null) {
+            toast("لا توجد شبكة محلية");
+            return;
+        }
+        final String token = newToken();
+        final String addr = "http://" + ip + ":8767/" + token;
+        final Dlg[] dh = new Dlg[1];
+        phoneSrv.uploadDir = new File(getFilesDir(), "audio");
+        phoneSrv.lastUpload = null;
+        boolean ok = phoneSrv.start(8767, (m, path, body) -> {
+            if (!path.startsWith("/" + token)) return new PhoneServer.Resp(404, "text/plain", new byte[0]);
+            if (m.equals("POST")) {
+                final String f = phoneSrv.lastUpload;
+                if (f == null) return PhoneServer.Resp.html("<h2>⚠ لم يصل الملف</h2>");
+                runOnUiThread(() -> {
+                    phoneSrv.stop();
+                    try {
+                        if (dh[0] != null) dh[0].dismiss();
+                    } catch (Exception ignored) {
+                    }
+                    cb.on(f);
+                });
+                return PhoneServer.Resp.html("<h2>✓ وصل الملف إلى الشاشة</h2>");
+            }
+            return PhoneServer.Resp.html("<h2>رفع ملف صوتي إلى الشاشة</h2><input type=file id=f accept='audio/*,.mp3,.ogg,.m4a,.wav' "
+                    + "style='font-size:18px'><p><button style='font-size:22px;padding:12px 28px' onclick=\"var x=document.getElementById('f').files[0];"
+                    + "if(!x){alert('اختر ملفاً');return;}document.getElementById('s').innerText='جارٍ الرفع…';"
+                    + "fetch('/" + token + "/up?name='+encodeURIComponent(x.name),{method:'POST',body:x})"
+                    + ".then(r=>r.text()).then(t=>document.body.innerHTML=t).catch(e=>document.getElementById('s').innerText='فشل: '+e)\">"
+                    + "⬆ رفع</button></p><p id=s></p>");
+        });
+        if (!ok) {
+            toast("تعذّر تشغيل الخادم");
+            return;
+        }
+        handler.postDelayed(phoneSrv::stop, 10L * 60 * 1000);
+        dh[0] = qrDialog("رفع ملف صوتي من الجوال", "امسح الرمز بالجوال أو اللابتوب (نفس الواي فاي)، اختر ملف الصوت "
+                + "(mp3 / ogg / m4a) ثم اضغط «رفع». الحد 80 ميغابايت.", addr, "إغلاق", null);
+    }
+
+    private void audioFileFromDevice(TextCb cb) {
+        audioPicked = cb;
+        try {
+            Intent in = new Intent(Intent.ACTION_GET_CONTENT);
+            in.setType("audio/*");
+            in.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(in, "اختر ملفاً صوتياً"), 7711);
+        } catch (Exception e) {
+            audioPicked = null;
+            toast("لا يوجد مستعرض ملفات على هذا الجهاز — استخدم «الرفع من الجوال»");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != 7711 || audioPicked == null) return;
+        final TextCb cb = audioPicked;
+        audioPicked = null;
+        if (res != RESULT_OK || data == null || data.getData() == null) return;
+        final android.net.Uri uri = data.getData();
+        new Thread(() -> {
+            try {
+                File dir = new File(getFilesDir(), "audio");
+                dir.mkdirs();
+                File f = new File(dir, "audio_" + System.currentTimeMillis() + ".mp3");
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+                     java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                    byte[] buf = new byte[32768];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+                runOnUiThread(() -> cb.on(f.getAbsolutePath()));
+            } catch (Exception e) {
+                AppLog.error("AUDIO", "copy failed", e);
+                runOnUiThread(() -> toast("تعذّر نسخ الملف"));
+            }
+        }, "audiocopy").start();
+    }
+
+    /** Menu: where does this sound come from? */
+    private void pickAudioSource(final String title, final TextCb cb, final Runnable back) {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("📱  رفع من الجوال / اللابتوب (رمز QR)");
+        a.add(() -> audioFileUpload(cb));
+        l.add("📂  اختيار من ملفات الشاشة (إن وُجد مستعرض ملفات)");
+        a.add(() -> audioFileFromDevice(cb));
+        l.add("🔗  رابط mp3 مباشر (يمكن إدخاله من الجوال)");
+        a.add(() -> promptText("رابط ملف الصوت المباشر", "https://…/file.mp3", "", v -> {
+            if (!v.startsWith("http")) {
+                toast("الرابط لازم يبدأ بـ http");
+                return;
+            }
+            cb.on(v);
+        }));
+        menu(title, l, a, back);
+    }
+
     private void showAdhanSettings() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
@@ -4560,12 +4720,18 @@ public class MainActivity extends Activity {
         });
         l.add("⏱  مدة عرض الدعاء:  " + prefs.getInt("adhan_dua_secs", 20) + " ث");
         a.add(() -> numberDialog("مدة عرض الدعاء بالثواني", "adhan_dua_secs", 20, 3, 120, " ث", null, null, back, back));
-        l.add("🔉  صوت الدعاء (رابط mp3 اختياري):  " + (prefs.getString("adhan_dua_url", "").isEmpty() ? "بلا صوت" : "محدد"));
-        a.add(() -> promptText("رابط ملف صوت الدعاء (mp3) — اتركه فارغاً لإلغائه", "https://…/dua.mp3",
-                prefs.getString("adhan_dua_url", ""), v -> {
-                    prefs.edit().putString("adhan_dua_url", v).apply();
-                    showAdhanSettings();
-                }));
+        l.add("🔉  صوت الدعاء (ملف أو رابط، اختياري):  " + (prefs.getString("adhan_dua_url", "").isEmpty() ? "بلا صوت" : "محدد"));
+        a.add(() -> pickAudioSource("صوت الدعاء بعد الأذان", v -> {
+            prefs.edit().putString("adhan_dua_url", v).apply();
+            showAdhanSettings();
+        }, this::showAdhanSettings));
+        if (!prefs.getString("adhan_dua_url", "").isEmpty()) {
+            l.add("🗑  إزالة صوت الدعاء");
+            a.add(() -> {
+                prefs.edit().remove("adhan_dua_url").apply();
+                showAdhanSettings();
+            });
+        }
         l.add("⏳  الانتظار بعد الدعاء قبل العودة:  " + prefs.getInt("adhan_wait", 3) + " ث");
         a.add(() -> numberDialog("الانتظار بعد الدعاء (ثوانٍ)", "adhan_wait", 3, 0, 60, " ث", null, null, back, back));
         l.add("↩  العودة للتطبيق/الفيديو السابق بعد الانتهاء:  " + onOff(prefs.getBoolean("adhan_return", true)));
@@ -4643,17 +4809,12 @@ public class MainActivity extends Activity {
         a.add(() -> adhanSearch("adhan"));
         l.add("🔎  بحث بكلمة أخرى (azan، مكة، المدينة، قارئ…)");
         a.add(() -> promptText("كلمة البحث عن ملف صوتي", "adhan makkah", "adhan", this::adhanSearch));
-        l.add("➕  إضافة رابط mp3 / ogg خاص (يمكن من الجوال)");
-        a.add(() -> promptText("رابط مباشر لملف الأذان (mp3 أو ogg)", "https://…/adhan.mp3", "", v -> {
-            if (!v.startsWith("http")) {
-                toast("الرابط لازم يبدأ بـ http");
-                showAdhanSound();
-                return;
-            }
+        l.add("➕  إضافة أذان من ملف أو رابط (جوال / شاشة / رابط)");
+        a.add(() -> pickAudioSource("إضافة صوت أذان", v -> {
             String nm = v.substring(v.lastIndexOf('/') + 1);
             addAdhan(nm.isEmpty() ? "أذان مخصص" : nm, v);
             showAdhanSound();
-        }));
+        }, this::showAdhanSound));
         if (!cur.isEmpty()) {
             l.add("🗑  حذف المحدد من القائمة");
             a.add(() -> {
@@ -5020,6 +5181,9 @@ public class MainActivity extends Activity {
             applyWeatherStyle();
             showWeatherSettings();
         });
+        l.add("🖼  حجم أيقونات الطقس:  " + prefs.getInt("w_iconsz", 100) + "%");
+        a.add(() -> numberDialog("حجم أيقونات الطقس", "w_iconsz", 100, 40, 300, "%", null,
+                this::layoutWeather, back, back));
         l.add("🎛  ضبط دقيق لكل مسافة في البطاقة (بكسل بكسل، حتى التداخل)");
         a.add(this::showWeatherFine);
         l.add("📌  موضع البطاقة:  " + weatherPosName());
