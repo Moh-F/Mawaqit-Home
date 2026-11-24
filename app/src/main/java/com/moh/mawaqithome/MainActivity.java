@@ -4684,28 +4684,33 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             final List<String[]> items = new ArrayList<>();
             String err = null;
-            try {
-                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(
-                        "https://api.github.com/repos/Moh-F/Mawaqit-Home/contents/audio/" + dir + "?ref=main").openConnection();
-                h.setRequestProperty("User-Agent", "MawaqitHome");
-                h.setRequestProperty("Accept", "application/vnd.github+json");
-                h.setConnectTimeout(12000);
-                h.setReadTimeout(20000);
-                java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
-                try (java.io.InputStream in = h.getInputStream()) {
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+            final List<String> srcs = new ArrayList<>();
+            srcs.add("https://api.github.com/repos/Moh-F/Mawaqit-Home/contents/audio/" + dir + "?ref=main");
+            if ("adhan".equals(dir))
+                srcs.add("https://api.github.com/repos/Kiwifu/adhan-mp3/contents/");
+            for (String src : srcs) {
+                try {
+                    java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(src).openConnection();
+                    h.setRequestProperty("User-Agent", "MawaqitHome");
+                    h.setRequestProperty("Accept", "application/vnd.github+json");
+                    h.setConnectTimeout(12000);
+                    h.setReadTimeout(20000);
+                    java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+                    try (java.io.InputStream in = h.getInputStream()) {
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+                    }
+                    org.json.JSONArray ar = new org.json.JSONArray(b.toString("UTF-8"));
+                    for (int i = 0; i < ar.length(); i++) {
+                        org.json.JSONObject o = ar.getJSONObject(i);
+                        String nm = o.optString("name");
+                        if (!nm.toLowerCase().matches(".*\\.(mp3|ogg|m4a|wav|aac)$")) continue;
+                        items.add(new String[]{nm, o.optString("download_url")});
+                    }
+                } catch (Exception e) {
+                    if (items.isEmpty()) err = e.toString();
                 }
-                org.json.JSONArray ar = new org.json.JSONArray(b.toString("UTF-8"));
-                for (int i = 0; i < ar.length(); i++) {
-                    org.json.JSONObject o = ar.getJSONObject(i);
-                    String nm = o.optString("name");
-                    if (!nm.toLowerCase().matches(".*\\.(mp3|ogg|m4a|wav|aac)$")) continue;
-                    items.add(new String[]{nm, o.optString("download_url")});
-                }
-            } catch (Exception e) {
-                err = e.toString();
             }
             final String ferr = err;
             runOnUiThread(() -> {
