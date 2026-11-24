@@ -4354,7 +4354,6 @@ public class MainActivity extends Activity {
     private boolean adhanRunning, adhanReturn, duaTimeUp, duaAudioDone, adhanEndScheduled;
     private static final String DUA_TEXT = "اللَّهُمَّ رَبَّ هَذِهِ الدَّعْوَةِ التَّامَّةِ، وَالصَّلَاةِ الْقَائِمَةِ،\n"
             + "آتِ مُحَمَّدًا الْوَسِيلَةَ وَالْفَضِيلَةَ،\nوَابْعَثْهُ مَقَامًا مَحْمُودًا الَّذِي وَعَدْتَهُ";
-    private static final String[] PRAYER_NAMES = {"الفجر", "الظهر", "العصر", "المغرب", "العشاء"};
 
     private void handleAdhanIntent(Intent in) {
         if (in == null) return;
