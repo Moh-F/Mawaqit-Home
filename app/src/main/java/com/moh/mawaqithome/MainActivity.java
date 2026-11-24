@@ -1492,10 +1492,11 @@ public class MainActivity extends Activity {
 
     /** "اليوم: 11/19" - the date is lighter and a little smaller. */
     private CharSequence dayLabel(String name, String date) {
-        String full = date.isEmpty() ? name : name + ": " + date;
+        boolean colsMode = prefs.getInt("w_layout", 0) == 1;
+        String full = date.isEmpty() ? name : name + (colsMode ? "\n" : ": ") + date;
         SpannableString sp = new SpannableString(full);
         if (!date.isEmpty()) {
-            int st = name.length() + 1;
+            int st = name.length() + (colsMode ? 1 : 2);
             sp.setSpan(new ForegroundColorSpan(0xCCFFFFFF), st, full.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             sp.setSpan(new AbsoluteSizeSpan(wsc(11)), st, full.length(),
@@ -2670,7 +2671,7 @@ public class MainActivity extends Activity {
         int labelH = dp(22);
         int avail = stripH - labelH - dp(9);
         float scale = prefs.getInt("tile_pct", 100) / 100f;
-        int perRow = avail / rows;
+        int perRow = (avail - (rows - 1) * tileGap()) / rows;
         float base = perRow * 0.96f;
         tilePx = Math.max(dp(34), Math.min(perRow, Math.round(base * scale)));
         iconPx = Math.round(tilePx * Math.max(50, Math.min(100, prefs.getInt("icon_fill", 84))) / 100f);
@@ -2780,6 +2781,36 @@ public class MainActivity extends Activity {
         return 0;
     }
 
+    private ScrollView stripV;
+
+    /** Horizontal strip (scrolls sideways) or wrapped lines (scrolls up/down, one line after the other). */
+    private void attachGrid(boolean wrap) {
+        ViewGroup cur = (ViewGroup) grid.getParent();
+        if (wrap) {
+            if (stripV != null && cur == stripV) return;
+            if (cur != null) cur.removeView(grid);
+            rowScroll.removeAllViews();
+            if (stripV == null) {
+                stripV = new ScrollView(this);
+                stripV.setVerticalScrollBarEnabled(false);
+                stripV.setClipChildren(false);
+            }
+            stripV.removeAllViews();
+            stripV.addView(grid, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            rowScroll.setFillViewport(true);
+            rowScroll.addView(stripV, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        } else {
+            if (cur == rowScroll) return;
+            if (cur != null) cur.removeView(grid);
+            rowScroll.removeAllViews();
+            rowScroll.setFillViewport(false);
+            rowScroll.addView(grid, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+    }
+
     private void showTab(int tabIdx, int focusIndex) {
         if (tilePx <= 0) return;
         if (tabIdx < 0 || tabIdx >= tabs.size()) tabIdx = tabIndexByKind(K_ALL);
@@ -2798,15 +2829,24 @@ public class MainActivity extends Activity {
         tiles.clear();
         rowScroll.scrollTo(0, 0);
         nameLabel.setText("");
+        final boolean wrapMode = prefs.getInt("strip_mode", 0) == 1;
+        attachGrid(wrapMode);
+        int total = tab.kind == K_SYS ? SHORTCUTS.length : listFor(tab).size();
+        int availW = Math.max(dp(200), rowScroll.getWidth() > 0 ? rowScroll.getWidth()
+                : Math.round(sizeW * Math.max(30, Math.min(100, prefs.getInt("strip_wp", 100))) / 100f) - dp(70));
+        int perLine = Math.max(1, availW / (tileW() + tileGap()));
+        final int lineCount = wrapMode ? Math.max(1, (total + perLine - 1) / perLine) : rows;
 
         List<LinearLayout> lines = new ArrayList<>();
-        for (int r = 0; r < rows; r++) {
+        for (int r = 0; r < lineCount; r++) {
             LinearLayout line = new LinearLayout(this);
             line.setOrientation(LinearLayout.HORIZONTAL);
             line.setGravity(Gravity.CENTER_VERTICAL);
             line.setClipChildren(false);
-            grid.addView(line, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, tilePx));
+            LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                    wrapMode ? ViewGroup.LayoutParams.MATCH_PARENT : ViewGroup.LayoutParams.WRAP_CONTENT, tilePx);
+            if (r < rows - 1 || wrapMode) glp.bottomMargin = tileGap();
+            grid.addView(line, glp);
             lines.add(line);
         }
 
@@ -2814,7 +2854,7 @@ public class MainActivity extends Activity {
         if (tab.kind == K_SYS) {
             for (Shortcut s : SHORTCUTS) {
                 View v = buildShortcutTile(s, s.actions[0].equals("#settings") && pendingInfo != null);
-                lines.get(n % rows).addView(v);
+                lines.get(wrapMode ? n / perLine : n % rows).addView(v);
                 tiles.add(v);
                 n++;
             }
@@ -2822,7 +2862,7 @@ public class MainActivity extends Activity {
             List<AppEntry> list = listFor(tab);
             for (AppEntry a : list) {
                 View v = buildTile(a, tab.kind != K_FAV && favs.contains(a.pkg));
-                lines.get(n % rows).addView(v);
+                lines.get(wrapMode ? n / perLine : n % rows).addView(v);
                 tiles.add(v);
                 n++;
             }
@@ -2949,7 +2989,7 @@ public class MainActivity extends Activity {
                 tick();
             }
         });
-        f.setLayoutParams(new LinearLayout.LayoutParams(tileW(), tilePx));
+        f.setLayoutParams(tileLp());
         return f;
     }
 
@@ -2959,6 +2999,16 @@ public class MainActivity extends Activity {
 
     private boolean rectIcons() {
         return prefs.getInt("icon_style", 0) >= 9;
+    }
+
+    private int tileGap() {
+        return dp(prefs.getInt("tile_gap", 5));
+    }
+
+    private LinearLayout.LayoutParams tileLp() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(tileW(), tilePx);
+        p.setMargins(tileGap() / 2, 0, tileGap() - tileGap() / 2, 0);
+        return p;
     }
 
     private int tileW() {
@@ -3033,7 +3083,7 @@ public class MainActivity extends Activity {
                 tick();
             }
         });
-        f.setLayoutParams(new LinearLayout.LayoutParams(tileW(), tilePx));
+        f.setLayoutParams(tileLp());
         return f;
     }
 
@@ -4350,6 +4400,22 @@ public class MainActivity extends Activity {
                 i -> {
                     prefs.edit().putInt("rows", i + 1).apply();
                     recreate();
+                }, this::showStripSettings));
+        l.add("↔  الفراغ بين الأيقونات:  " + prefs.getInt("tile_gap", 5) + " dp  (0 = ملتصقة)");
+        a.add(() -> numberDialog("الفراغ بين الأيقونات", "tile_gap", 5, 0, 40, " dp", null, null,
+                this::recreate, this::showStripSettings));
+        l.add("📜  ترتيب الأيقونات:  " + (prefs.getInt("strip_mode", 0) == 1 ? "أسطر (تمرير طولي)" : "صف أفقي (تمرير جانبي)"));
+        a.add(() -> choice("ترتيب الأيقونات عند كثرتها", new String[]{"صف أفقي — تمرير جانبي",
+                "أسطر — كل سطر تحت الآخر، تمرير طولي"}, prefs.getInt("strip_mode", 0), i -> {
+            prefs.edit().putInt("strip_mode", i).apply();
+            recreate();
+        }, this::showStripSettings));
+        l.add("⬇  إخفاء الشريط تلقائياً بعد:  " + (prefs.getInt("strip_hide", 0) == 0 ? "لا يُخفى"
+                : prefs.getInt("strip_hide", 0) + " ث") + "  (يعود بأي زر)");
+        a.add(() -> numberDialog("إخفاء الشريط بعد (ثوانٍ بلا ضغط، 0 = لا يُخفى)", "strip_hide", 0, 0, 600, " ث",
+                "لا يُخفى", null, () -> {
+                    scheduleStripHide();
+                    showStripSettings();
                 }, this::showStripSettings));
         l.add("🎨  شكل الأيقونات:  " + ICON_STYLES[Math.max(0, Math.min(ICON_STYLES.length - 1, prefs.getInt("icon_style", 0)))]);
         a.add(() -> choice("شكل الأيقونات", ICON_STYLES, prefs.getInt("icon_style", 0), i -> {
@@ -6217,6 +6283,29 @@ public class MainActivity extends Activity {
 
     // --------------------------------------------------------- Screen saver
 
+    private boolean stripHidden;
+    private final Runnable stripHideTask = () -> {
+        if (stage == 0 && prefs.getInt("strip_hide", 0) > 0 && !railOpen && !moveMode && !wMove && strip != null) {
+            stripHidden = true;
+            strip.animate().translationY(stripH + dp(6)).setDuration(ms(500L)).start();
+        }
+    };
+
+    private void scheduleStripHide() {
+        handler.removeCallbacks(stripHideTask);
+        int sec = prefs.getInt("strip_hide", 0);
+        if (sec > 0 && stage == 0) handler.postDelayed(stripHideTask, sec * 1000L);
+    }
+
+    private void showStripNow() {
+        if (stripHidden && strip != null) {
+            stripHidden = false;
+            strip.animate().translationY(0f).setDuration(ms(300L)).start();
+            if (root.findFocus() == null) focusFirst();
+        }
+        scheduleStripHide();
+    }
+
     private void applyStage(int s, boolean animate) {
         if (sizeH <= 0) {
             stage = s;
@@ -6231,8 +6320,10 @@ public class MainActivity extends Activity {
         if (!ui && railOpen) closeRail(false);
         if (ui) applyRootBg(); else root.setBackgroundColor(Color.BLACK);   // no green edges while pixel-shifting
 
+        stripHidden = false;
         strip.animate().translationY(ui ? 0f : stripH + dp(6)).setDuration(dur)
                 .setInterpolator(ip).start();
+        if (ui) scheduleStripHide(); else handler.removeCallbacks(stripHideTask);
         applyWeatherVis(animate);
         applySaverClear();
 
@@ -6293,6 +6384,11 @@ public class MainActivity extends Activity {
                 applyStage(0, true);
                 return true;
             }
+            if (stripHidden) {                     // first key only brings the strip back
+                showStripNow();
+                return true;
+            }
+            scheduleStripHide();
             if (wMove) {
                 if (k == KeyEvent.KEYCODE_DPAD_LEFT) adjustWeather(-3, 0);
                 else if (k == KeyEvent.KEYCODE_DPAD_RIGHT) adjustWeather(3, 0);
@@ -6326,7 +6422,8 @@ public class MainActivity extends Activity {
                 openRail();
                 return true;
             }
-            if ((k == KeyEvent.KEYCODE_DPAD_UP || k == KeyEvent.KEYCODE_DPAD_DOWN) && rows == 1) {
+            if ((k == KeyEvent.KEYCODE_DPAD_UP || k == KeyEvent.KEYCODE_DPAD_DOWN) && rows == 1
+                    && prefs.getInt("strip_mode", 0) != 1) {
                 return true;
             }
             if (root.findFocus() == null) focusFirst();
