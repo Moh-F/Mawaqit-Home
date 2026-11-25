@@ -1231,6 +1231,11 @@ public class MainActivity extends Activity {
         return Math.round(px * 2f / getResources().getDisplayMetrics().density);
     }
 
+    private int gCity() { return fine("w_f_cgap", tgt(3)); }
+
+    /** Size (px-scaled) of the detail line: humidity, rain, wind… with their icons. */
+    private float dsz() { return 10f * Math.max(50, Math.min(250, prefs.getInt("w_dsz", 100))) / 100f; }
+
     private int gDayIcon() { return fine("w_f_dayicon", tgt(prefs.getInt("w_gap", 2))); }
 
     private int gIconTemp() { return fine("w_f_icontemp", tgt(prefs.getInt("w_gap", 2))); }
@@ -1358,6 +1363,7 @@ public class MainActivity extends Activity {
 
     /** Sizes every part of the card from the screen width, so it stays a small tidy rectangle. */
     private void layoutWeather() {
+        updateWeatherHeader();
         weatherCard.setPadding(padL(), padT(), padR(), padB());
         setPx(weatherCity, 12);
         setPx(weatherAge, 10);
@@ -1385,7 +1391,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < 3; i++) {
                 setPx(wDay[i], 12);
                 setPx(wTemp[i], 15);
-                setPx(wSub[i], 10);
+                setPx(wSub[i], dsz());
                 setPx(wIcon[i], 26 * prefs.getInt("w_iconsz", 100) / 100f);
                 if (i >= Math.max(1, Math.min(3, prefs.getInt("w_days", 3)))) continue;
                 dW = Math.max(dW, (int) Math.ceil(Layout.getDesiredWidth(wDay[i].getText(), wDay[i].getPaint())));
@@ -1399,7 +1405,7 @@ public class MainActivity extends Activity {
                 for (int k = 0; k < 5; k++) {
                     int mw = 0;
                     for (int i = 0; i < 3 && i < Math.max(1, Math.min(3, prefs.getInt("w_days", 3))); i++) {
-                        setPx(wFld[i][k], 10);
+                        setPx(wFld[i][k], dsz());
                         if (wFld[i][k].getText().length() > 0) mw = Math.max(mw, (int) Math.ceil(
                                 Layout.getDesiredWidth(wFld[i][k].getText(), wFld[i][k].getPaint())) + 3);
                     }
@@ -1446,7 +1452,7 @@ public class MainActivity extends Activity {
             setPx(wDay[i], 12);
             setPx(wIcon[i], 26 * prefs.getInt("w_iconsz", 100) / 100f);
             setPx(wTemp[i], 15);
-            setPx(wSub[i], 10);
+            setPx(wSub[i], dsz());
             int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
             wDay[i].setGravity(cols ? Gravity.CENTER : (al == 1 ? Gravity.CENTER
                     : al == 2 ? Gravity.LEFT : Gravity.RIGHT));
@@ -1581,8 +1587,30 @@ public class MainActivity extends Activity {
 
     private void updateWeatherHeader() {
         boolean two = prefs.getInt("w_city_lines", 1) == 2;
-        weatherCity.setText("📍 " + (manualLocation() ? "الموقع:" : "مدينتك الحالية:") + (two ? "\n" : " ")
-                + currentCity());
+        final int gp = gCity();
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(
+                "📍 " + (manualLocation() ? "الموقع:" : "مدينتك الحالية:"));
+        if (two) {
+            sb.append("\n");
+            weatherCity.setLineSpacing(gp, 1f);
+        } else {
+            weatherCity.setLineSpacing(0f, 1f);
+            final int w = Math.max(0, gp);
+            int st = sb.length();
+            sb.append(" ");
+            sb.setSpan(new android.text.style.ReplacementSpan() {
+                @Override
+                public int getSize(android.graphics.Paint p, CharSequence t, int a, int b, android.graphics.Paint.FontMetricsInt fm) {
+                    return w;
+                }
+
+                @Override
+                public void draw(Canvas c, CharSequence t, int a, int b, float x, int top, int y, int bt, android.graphics.Paint p) {
+                }
+            }, st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        sb.append(currentCity());
+        weatherCity.setText(sb);
         weatherCity.setSingleLine(false);
         weatherCity.setMaxLines(two ? 2 : 1);
         weatherCity.setEllipsize(null);
@@ -1640,7 +1668,7 @@ public class MainActivity extends Activity {
                 wTemp[i].setText(weather.curTemp + "°");
             } else {
                 wIcon[i].setText(d.icon);
-                wTemp[i].setText(d.max + "° / " + d.min + "°");
+                wTemp[i].setText(d.max + "°/" + d.min + "°");
             }
         }
         layoutWeather();
@@ -2279,7 +2307,13 @@ public class MainActivity extends Activity {
         dialog("تحديث متاح").setMessage("الإصدار الجديد: " + pendingInfo.name
                 + "\nإصدارك الحالي: " + Updater.currentName(this)
                 + "\n\nسيُنزَّل ويُثبَّت فوق النسخة الحالية وتبقى كل إعداداتك.")
-                .setPositiveButton("تحديث الآن", (d, w) -> downloadUpdate(true))
+                .setPositiveButton("تحديث الآن", (d, w) -> {
+                    pendingReturn = null;                       // do not step back into the settings menu
+                    handler.post(() -> {
+                        if (topDlg != null) topDlg.dismiss();
+                    });
+                    downloadUpdate(true);
+                })
                 .setNegativeButton("لاحقاً", null).show();
     }
 
@@ -5508,10 +5542,6 @@ public class MainActivity extends Activity {
                 showAdhanSound();
             });
         }
-        l.add("🔎  بحث عن أذان مجاني (ويكيميديا كومنز)");
-        a.add(() -> adhanSearch("adhan"));
-        l.add("🔎  بحث بكلمة أخرى (azan، مكة، المدينة، قارئ…)");
-        a.add(() -> promptText("كلمة البحث عن ملف صوتي", "adhan makkah", "adhan", this::adhanSearch));
         l.add("➕  إضافة أذان من ملف أو رابط (جوال / شاشة / رابط)");
         a.add(() -> pickAudioSource("إضافة صوت أذان", v -> {
             addAdhan(soundLabel(v), v);
@@ -5568,25 +5598,6 @@ public class MainActivity extends Activity {
             showFajrSound();
         }, this::showFajrSound));
         menu("🌅 أذان الفجر", l, a, this::showAdhanSettings);
-    }
-
-    private void adhanSearch(final String q) {
-        toast("جارٍ البحث…");
-        AdhanSources.search(q, (found, err) -> runOnUiThread(() -> {
-            if (found.isEmpty()) {
-                toast(err != null ? "تعذّر البحث: " + err : "لا نتائج لهذه الكلمة");
-                showAdhanSound();
-                return;
-            }
-            final String[] names = new String[found.size()];
-            for (int i = 0; i < names.length; i++)
-                names[i] = found.get(i)[0] + (found.get(i)[2].isEmpty() ? "" : "  [" + found.get(i)[2] + "]");
-            choice("اختر الملف (سيُضاف للقائمة ويُحدَّد)", names, -1, i -> {
-                addAdhan(found.get(i)[0], found.get(i)[1]);
-                toast("أُضيف وحُدّد — جرّبه من «تجربة الأذان الآن»");
-                showAdhanSettings();
-            }, this::showAdhanSound);
-        }));
     }
 
     private void promptUrl() {
@@ -5883,11 +5894,11 @@ public class MainActivity extends Activity {
                 {"w_f_dayicon", "اسم اليوم ↔ الأيقونة"}, {"w_f_icontemp", "الأيقونة ↔ الحرارة"},
                 {"w_f_sub", "الحرارة ↔ التفاصيل (مطر/رياح…)"}, {"w_f_col", "بين أعمدة الأيام"},
                 {"w_f_row", "بين صفوف الأيام"}, {"w_f_in", "بين الأسطر داخل اليوم"},
-                {"w_f_head1", "تحت المدينة (فوق الخط)"}, {"w_f_head2", "تحت الخط (فوق الأيام)"},
+                {"w_f_cgap", "بين «مدينتك الحالية» واسم المدينة"}, {"w_f_head1", "تحت المدينة (فوق الخط)"}, {"w_f_head2", "تحت الخط (فوق الأيام)"},
                 {"w_f_padt", "هامش البطاقة: أعلى"}, {"w_f_padb", "هامش البطاقة: أسفل"},
                 {"w_f_padl", "هامش البطاقة: يسار"}, {"w_f_padr", "هامش البطاقة: يمين"}};
         final int[] autoVals = {fineSteps(gDayIcon()), fineSteps(gIconTemp()), fineSteps(gSub()), fineSteps(gCol()),
-                fineSteps(gRow()), fineSteps(gIn()), fineSteps(tgt(5)), fineSteps(tgt(3)), fineSteps(padT()),
+                fineSteps(gRow()), fineSteps(gIn()), fineSteps(gCity()), fineSteps(tgt(5)), fineSteps(tgt(3)), fineSteps(padT()),
                 fineSteps(padB()), fineSteps(padL()), fineSteps(padR())};
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
@@ -5920,8 +5931,11 @@ public class MainActivity extends Activity {
             applyWeatherStyle();
             showWeatherSettings();
         });
-        l.add("🖼  حجم أيقونات الطقس:  " + prefs.getInt("w_iconsz", 100) + "%");
-        a.add(() -> numberDialog("حجم أيقونات الطقس", "w_iconsz", 100, 40, 300, "%", null,
+        l.add("🖼  حجم أيقونة الحالة الجوية (سحاب/شمس):  " + prefs.getInt("w_iconsz", 100) + "%");
+        a.add(() -> numberDialog("حجم أيقونة الحالة الجوية", "w_iconsz", 100, 40, 300, "%", null,
+                this::layoutWeather, back, back));
+        l.add("💧  حجم أيقونات ونص التفاصيل (رطوبة، مطر، رياح…):  " + prefs.getInt("w_dsz", 100) + "%");
+        a.add(() -> numberDialog("حجم أيقونات ونص التفاصيل", "w_dsz", 100, 50, 250, "%", null,
                 this::layoutWeather, back, back));
         l.add("🎛  ضبط دقيق لكل مسافة في البطاقة (بكسل بكسل، حتى التداخل)");
         a.add(this::showWeatherFine);
@@ -5972,23 +5986,8 @@ public class MainActivity extends Activity {
                     layoutWeather();
                     showWeatherSettings();
                 }, back));
-        l.add("↔  التباعد بين العناصر:  " + prefs.getInt("w_gap", 2) + "  (0 = ملتصقة)");
-        a.add(() -> numberDialog("التباعد بين اليوم والأيقونة والحرارة (أقل = أقرب)", "w_gap", 2, 0, 30, "", null,
-                this::layoutWeather, back, back));
         l.add("📏  تقليل كل المسافات (المدينة، الأيام، الرموز…):  " + prefs.getInt("w_tight", 40) + "%  (100 = أقرب ما يمكن)");
         a.add(() -> numberDialog("تقليل المسافات بين كل أجزاء البطاقة", "w_tight", 40, 0, 100, "%", null,
-                this::layoutWeather, back, back));
-        l.add("▭  هامش البطاقة الخارجي:  " + prefs.getInt("w_pad", 5) + "  (0 = بلا هامش)");
-        a.add(() -> numberDialog("هامش البطاقة الخارجي (أقل = بطاقة أصغر)", "w_pad", 5, 0, 30, "", null,
-                this::layoutWeather, back, back));
-        l.add("↔  التباعد بين أعمدة الأيام (اليوم / غداً / بعد غد):  " + prefs.getInt("w_colgap", 2) + "  (0 = ملتصقة)");
-        a.add(() -> numberDialog("التباعد بين أعمدة الأيام (أقل = أقرب)", "w_colgap", 2, 0, 30, "", null,
-                this::layoutWeather, back, back));
-        l.add("↨  التباعد بين الأسطر داخل اليوم الواحد:  " + prefs.getInt("w_inrow", 1) + "  (0 = ملتصقة)");
-        a.add(() -> numberDialog("التباعد بين الأسطر داخل اليوم الواحد", "w_inrow", 1, 0, 30, "", null,
-                this::layoutWeather, back, back));
-        l.add("↕  التباعد بين صفوف الأيام:  " + prefs.getInt("w_rowgap", 1) + "  (0 = ملتصقة)");
-        a.add(() -> numberDialog("التباعد بين الأيام (أقل = أقرب)", "w_rowgap", 1, 0, 30, "", null,
                 this::layoutWeather, back, back));
         l.add("📍  سطر المدينة:  " + (prefs.getInt("w_city_lines", 1) == 2 ? "سطران" : "سطر واحد") + " • "
                 + new String[]{"يمين", "وسط", "يسار"}[prefs.getInt("w_city_align", 1) % 3]);
@@ -7564,6 +7563,11 @@ public class MainActivity extends Activity {
 
     private boolean stripHidden;
     private final Runnable stripHideTask = () -> {
+        if (prefs.getInt("strip_hide", 0) > 0 && (topDlg != null || openDialogs > 0 || quranRunning || adhanRunning
+                || updBusy)) {
+            scheduleStripHide();                  // something is happening inside the app: keep the strip visible
+            return;
+        }
         if (stage == 0 && prefs.getInt("strip_hide", 0) > 0 && !railOpen && !moveMode && !wMove && strip != null) {
             stripHidden = true;
             strip.animate().translationY(stripH + dp(6)).setDuration(ms(500L)).start();
