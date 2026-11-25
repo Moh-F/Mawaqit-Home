@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>التحكم عن بعد — Mawaqit Home</title>
+<style>
+:root{--bg:#10141a;--fg:#eef2f6;--card:#1b222c;--ac:#3fb68b;--mut:#8c98a6;--bd:#2c3644}
+@media(prefers-color-scheme:light){:root{--bg:#f3f5f8;--fg:#14202b;--card:#fff;--ac:#13805c;--mut:#5b6a78;--bd:#d5dce4}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px system-ui,sans-serif;padding:16px;max-width:640px;margin-inline:auto}
+h1{font-size:20px}h2{font-size:16px;margin:0 0 10px}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin:12px 0}
+input,select,textarea{width:100%;box-sizing:border-box;padding:10px;margin:4px 0 10px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--fg);font:inherit}
+button{padding:11px 14px;margin:4px;border:0;border-radius:8px;background:var(--ac);color:#fff;font:inherit;cursor:pointer}
+button.s{background:var(--bd);color:var(--fg)}
+.m{color:var(--mut);font-size:14px}#st{min-height:1.4em}
+</style></head><body>
+<h1>🕌 التحكم عن بعد — Mawaqit Home</h1>
+<div class="c"><h2>الاتصال</h2>
+<label>المستودع الخاص (owner/repo)</label><input id="repo" dir="ltr" placeholder="Moh-F/mawaqit-sync">
+<label>مفتاح GitHub (يُحفظ على هذا الجوال فقط)</label><input id="tok" dir="ltr" type="password" placeholder="github_pat_…">
+<button onclick="save()">حفظ واتصال</button><div id="st" class="m"></div></div>
+
+<div class="c"><h2>الجهاز المستهدف</h2>
+<input id="to" value="*" dir="ltr"><div class="m">* = كل الأجهزة، أو اسم الجهاز كما كتبته في الإعدادات.</div></div>
+
+<div class="c"><h2>أوامر</h2>
+<button onclick="cmd('adhan_test',prompt('رقم الصلاة (0 فجر … 4 عشاء) أو فارغ'))">🔔 تجربة الأذان</button>
+<button onclick="cmd('quran_play',prompt('رقم السورة (1-114)'))">📖 تشغيل سورة</button>
+<button class="s" onclick="cmd('stop','')">⏹ إيقاف</button>
+<button class="s" onclick="cmd('reload','')">⟳ إعادة تحميل الصفحة</button>
+<button class="s" onclick="cmd('wake','')">☀ إيقاظ الشاشة</button>
+<button onclick="cmd('msg',prompt('نص الرسالة'))">📩 رسالة على الشاشة</button></div>
+
+<div class="c"><h2>تغيير إعداد</h2>
+<input id="k" dir="ltr" placeholder="المفتاح مثل adhan_vol"><input id="v" dir="ltr" placeholder="القيمة (رقم، true/false، أو نص)">
+<button onclick="setKey()">تطبيق</button></div>
+
+<div class="c"><h2>الإعدادات المشتركة الحالية</h2><div id="info" class="m">—</div>
+<button class="s" onclick="load()">تحديث</button>
+<textarea id="js" rows="10" dir="ltr" spellcheck="false"></textarea>
+<button onclick="pushSettings()">⬆ حفظ التعديل اليدوي</button></div>
+<script>
+const $=id=>document.getElementById(id);
+const ls={get:k=>{try{return localStorage.getItem(k)||''}catch(e){return ''}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+$('repo').value=ls.get('repo');$('tok').value=ls.get('tok');
+const say=t=>$('st').textContent=t;
+const b64=s=>btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+const unb64=s=>new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g,'')),c=>c.charCodeAt(0)));
+async function api(m,p,body){
+  const r=await fetch('https://api.github.com/repos/'+ls.get('repo')+'/contents/'+p,{method:m,
+   headers:{Authorization:'Bearer '+ls.get('tok'),Accept:'application/vnd.github+json'},body:body?JSON.stringify(body):undefined,cache:'no-store'});
+  return {code:r.status,json:r.status<300||r.status==404?await r.json().catch(()=>({})):{}};
+}
+function save(){ls.set('repo',$('repo').value.trim());ls.set('tok',$('tok').value.trim());load()}
+async function load(){
+  try{say('جارٍ الاتصال…');const r=await api('GET','sync/settings.json');
+   if(r.code==404){say('متصل. لا توجد إعدادات بعد — شغّل المزامنة على أحد الأجهزة.');return}
+   if(r.code!=200){say('فشل: HTTP '+r.code+' — راجع المستودع والمفتاح');return}
+   const d=JSON.parse(unb64(r.json.content));
+   $('info').textContent='النسخة '+d.rev+' — من «'+d.name+'» — '+new Date(d.at).toLocaleString('ar');
+   $('js').value=JSON.stringify(d.settings,null,1);window._sha=r.json.sha;window._doc=d;say('متصل ✓')}
+  catch(e){say('خطأ: '+e.message)}
+}
+async function cmd(t,arg){
+  if(arg===null)return;
+  try{const r=await api('GET','sync/cmds.json');let cmds=[],sha;
+   if(r.code==200){sha=r.json.sha;cmds=JSON.parse(unb64(r.json.content)).cmds||[]}
+   const now=Date.now();cmds=cmds.filter(c=>now-c.id<3600000).slice(-20);
+   cmds.push({id:now,t,to:$('to').value.trim()||'*',arg:arg||''});
+   const w=await api('PUT','sync/cmds.json',{message:'cmd '+t,content:b64(JSON.stringify({cmds},null,1)),sha});
+   say(w.code<300?'أُرسل ✓ (يصل خلال ~دقيقة)':'فشل الإرسال: HTTP '+w.code)}
+  catch(e){say('خطأ: '+e.message)}
+}
+async function pushSettings(){
+  try{const d=JSON.parse(JSON.stringify(window._doc||{rev:0}));d.settings=JSON.parse($('js').value);
+   d.rev=(d.rev||0)+1;d.by='web';d.name='web';d.at=Date.now();
+   const w=await api('PUT','sync/settings.json',{message:'settings from web',content:b64(JSON.stringify(d,null,1)),sha:window._sha});
+   say(w.code<300?'حُفظ ✓ — ستتبعه الأجهزة':'فشل: HTTP '+w.code);load()}
+  catch(e){say('خطأ: '+e.message)}
+}
+function setKey(){
+  const k=$('k').value.trim();let v=$('v').value;if(!k)return;
+  if(v==='true')v=true;else if(v==='false')v=false;else if(v!==''&&!isNaN(v))v=Number(v);
+  sendSet(k,v)
+}
+async function sendSet(k,v){
+  try{const r=await api('GET','sync/cmds.json');let cmds=[],sha;
+   if(r.code==200){sha=r.json.sha;cmds=JSON.parse(unb64(r.json.content)).cmds||[]}
+   const now=Date.now();cmds=cmds.filter(c=>now-c.id<3600000).slice(-20);
+   cmds.push({id:now,t:'set',k,v,to:$('to').value.trim()||'*'});
+   const w=await api('PUT','sync/cmds.json',{message:'set '+k,content:b64(JSON.stringify({cmds},null,1)),sha});
+   say(w.code<300?'أُرسل ✓':'فشل: HTTP '+w.code)}catch(e){say('خطأ: '+e.message)}
+}
+if(ls.get('repo')&&ls.get('tok'))load();
+</script></body></html>

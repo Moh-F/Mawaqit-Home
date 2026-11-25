@@ -595,6 +595,8 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);                      // start the network as early as possible
         buildWeatherCard();
         buildCdCard();
+        sync = new RemoteSync(this, prefs, syncHost);
+        if (RemoteSync.configured(prefs)) sync.start();
         buildStrip();
         buildBubble();
         buildRail();
@@ -726,6 +728,7 @@ public class MainActivity extends Activity {
         webView.destroy();
         AppLog.info("APP", "destroyed");
         if (quranPlayer != null) quranPlayer.stop();
+        if (sync != null) sync.stop();
         phoneSrv.stop();
         super.onDestroy();
     }
@@ -4035,6 +4038,8 @@ public class MainActivity extends Activity {
         a.add(this::showAdhanSettings);
         l.add("⏳  العدّادات (رمضان، العيد، الفجر والمغرب، أحداثي):  " + onOff(prefs.getBoolean("cd_show", false)));
         a.add(this::showCountdownSettings);
+        l.add("☁  المزامنة والتحكم عن بعد (GitHub):  " + onOff(RemoteSync.configured(prefs)));
+        a.add(this::showSyncSettings);
         l.add("🔕  احترام وضع الصامت والاهتزاز وعدم الإزعاج (للجوالات):  " + onOff(prefs.getBoolean("respect_ringer", true)));
         a.add(() -> {
             prefs.edit().putBoolean("respect_ringer", !prefs.getBoolean("respect_ringer", true)).apply();
@@ -4849,6 +4854,233 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ------------------------------------------------------------------ Remote control & sync (GitHub)
+
+    private RemoteSync sync;
+    private boolean syncRecreatePending;
+    private static final String PANEL_URL = "https://moh-f.github.io/Mawaqit-Home/remote/";
+
+    private final RemoteSync.Host syncHost = new RemoteSync.Host() {
+        @Override
+        public JSONObject snapshot() throws Exception {
+            return syncSnapshot();
+        }
+
+        @Override
+        public void apply(JSONObject s) throws Exception {
+            syncApply(s);
+        }
+
+        @Override
+        public void command(JSONObject c) {
+            runRemoteCommand(c);
+        }
+    };
+
+    private boolean syncExcluded(String k) {
+        if (k.startsWith("sync_") || k.startsWith("adb_") || k.startsWith("ip_") || k.startsWith("next_")
+                || k.startsWith("upd_") || k.startsWith("pg_")) return true;
+        switch (k) {
+            case "adhan_last": case "quran_last": case "bg_last": case "bg_slot": case "bg_smartkey": case "bg_credit":
+            case "last_code": case "notice": case "prayers": case "prayers_src": case "prayers_ts": case "profiles":
+            case "tab_id": case "boot": case "watchdog": case "px_shift":
+                return true;
+            default:
+        }
+        if (!prefs.getBoolean("sync_screen", false)) {
+            switch (k) {
+                case "font_pct": case "w_size": case "w_font": case "cd_size": case "icon_fill": case "page_vw":
+                case "norm_ui": case "rows": case "fit":
+                    return true;
+                default:
+            }
+        }
+        return false;
+    }
+
+    private String libPrefix() {
+        return new File(getFilesDir(), "audio/lib").getAbsolutePath() + "/";
+    }
+
+    /** Settings to share: no device-bound keys, local sound files written as portable "lib://name" paths. */
+    private JSONObject syncSnapshot() throws Exception {
+        JSONObject src = settingsJson(true), out = new JSONObject();
+        Iterator<String> it = src.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (syncExcluded(k)) continue;
+            Object v = src.get(k);
+            if (v instanceof String) {
+                String sv = ((String) v).replace(libPrefix(), "lib://");
+                if (sv.contains(getFilesDir().getAbsolutePath())) continue;        // a private file of this device
+                v = sv;
+            }
+            out.put(k, v);
+        }
+        return out;
+    }
+
+    private void syncApply(JSONObject s) throws Exception {
+        SharedPreferences.Editor ed = prefs.edit();
+        for (String k : new ArrayList<>(prefs.getAll().keySet()))
+            if (!syncExcluded(k) && !s.has(k) && !skipKey(k) && !profileExcluded(k)) ed.remove(k);
+        ed.apply();
+        JSONObject in = new JSONObject();
+        Iterator<String> it = s.keys();
+        java.util.regex.Pattern lib = java.util.regex.Pattern.compile("lib://([A-Za-z0-9._-]+)");
+        while (it.hasNext()) {
+            String k = it.next();
+            if (syncExcluded(k)) continue;
+            Object v = s.get(k);
+            if (v instanceof String) {
+                String sv = (String) v;
+                java.util.regex.Matcher m = lib.matcher(sv);
+                while (m.find()) fetchLibIfMissing(m.group(1));
+                v = sv.replace("lib://", libPrefix());
+            }
+            in.put(k, v);
+        }
+        applyJson(in, false);
+        WakeScheduler.scheduleNext(this);
+        if (adhanRunning || quranRunning) syncRecreatePending = true;
+        else handler.post(this::recreate);
+    }
+
+    private void fetchLibIfMissing(String fileName) {
+        File f = new File(libPrefix(), fileName);
+        if (f.exists() && f.length() > 1000) return;
+        for (String[] c : ADHAN_CATALOG)
+            if (c[0].replaceAll("[^A-Za-z0-9._-]", "_").equals(fileName)) {
+                downloadLibrarySound(c[0], "https://raw.githubusercontent.com/Moh-F/Mawaqit-Home/main/audio/adhan/" + c[0], p -> { });
+                return;
+            }
+        for (String[] c : DUA_CATALOG)
+            if (c[0].replaceAll("[^A-Za-z0-9._-]", "_").equals(fileName)) {
+                downloadLibrarySound(c[0], "https://raw.githubusercontent.com/Moh-F/Mawaqit-Home/main/audio/dua/" + c[0], p -> { });
+                return;
+            }
+    }
+
+    private void runRemoteCommand(JSONObject c) {
+        try {
+            String t = c.optString("t");
+            String arg = c.optString("arg", "");
+            AppLog.info("SYNC", "running command " + t + " " + arg);
+            switch (t) {
+                case "adhan_test":
+                    startAdhan(arg.isEmpty() ? -1 : Integer.parseInt(arg), true);
+                    break;
+                case "quran_play": {
+                    JSONObject o = null;
+                    if (arg.matches("\\d{1,3}") && Integer.parseInt(arg) <= 114)
+                        o = newQuranItem(Integer.parseInt(arg), 0, 0, "fix", 0, 0, 127);
+                    else if (arg.matches("\\d{6,}")) o = QuranSched.find(prefs, Long.parseLong(arg));
+                    if (o != null) startQuran(o, true);
+                    break;
+                }
+                case "stop":
+                    if (quranRunning) stopQuran(false);
+                    if (adhanRunning) endAdhan();
+                    break;
+                case "reload":
+                    if (webView != null) webView.reload();
+                    break;
+                case "msg":
+                    showBubble("📩 " + arg, 20000L);
+                    break;
+                case "wake":
+                    doWake();
+                    break;
+                case "set": {
+                    String k = c.optString("k");
+                    if (k.isEmpty() || syncExcluded(k) || skipKey(k)) break;
+                    Object v = c.get("v");
+                    JSONObject one = new JSONObject().put(k, v);
+                    applyJson(one, false);
+                    WakeScheduler.scheduleNext(this);
+                    if (adhanRunning || quranRunning) syncRecreatePending = true;
+                    else recreate();
+                    break;
+                }
+                default:
+            }
+        } catch (Exception e) {
+            AppLog.error("SYNC", "command failed", e);
+        }
+    }
+
+    private void syncAfterIdle() {
+        if (syncRecreatePending && !adhanRunning && !quranRunning) {
+            syncRecreatePending = false;
+            recreate();
+        }
+    }
+
+    private void showSyncSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showSyncSettings;
+        l.add("☁  المزامنة والتحكم عن بعد:  " + onOff(prefs.getBoolean("sync_on", false)));
+        a.add(() -> {
+            prefs.edit().putBoolean("sync_on", !prefs.getBoolean("sync_on", false)).apply();
+            if (RemoteSync.configured(prefs)) sync.start();
+            else sync.stop();
+            showSyncSettings();
+        });
+        l.add("📦  المستودع الخاص:  " + (prefs.getString("sync_repo", "").isEmpty() ? "غير محدد" : prefs.getString("sync_repo", "")));
+        a.add(() -> promptText("مستودع المزامنة (owner/repo)", "Moh-F/mawaqit-sync", prefs.getString("sync_repo", ""), v -> {
+            if (v.trim().matches("[\\w.-]+/[\\w.-]+")) prefs.edit().putString("sync_repo", v.trim()).apply();
+            else toast("الصيغة: owner/repo");
+            showSyncSettings();
+        }));
+        l.add("🔑  مفتاح الوصول (Token):  " + (prefs.getString("sync_token", "").isEmpty() ? "غير محدد" : "●●●●●●  محفوظ"));
+        a.add(() -> promptText("مفتاح GitHub (Fine-grained، صلاحية Contents: Read and write على هذا المستودع فقط)", "github_pat_…", "",
+                v -> {
+                    if (!v.trim().isEmpty()) prefs.edit().putString("sync_token", v.trim()).apply();
+                    showSyncSettings();
+                }));
+        l.add("🏷  اسم هذا الجهاز:  " + (prefs.getString("sync_name", "").isEmpty() ? "تلقائي" : prefs.getString("sync_name", "")));
+        a.add(() -> promptText("اسم هذا الجهاز (يظهر في صفحة التحكم)", "Fire Stick الصالون", prefs.getString("sync_name", ""), v -> {
+            prefs.edit().putString("sync_name", v.trim()).apply();
+            showSyncSettings();
+        }));
+        l.add("⇅  الاتجاه:  " + (prefs.getInt("sync_mode", 1) == 1 ? "ثنائي (أرسل تغييراتي وأستقبل غيرها)" : "استقبال فقط (يتبع الأجهزة الأخرى)"));
+        a.add(() -> choice("اتجاه المزامنة", new String[]{"استقبال فقط — هذا الجهاز يتبع ولا يرسل", "ثنائي — أرسل تغييراتي وأستقبل غيرها"},
+                prefs.getInt("sync_mode", 1), i -> {
+                    prefs.edit().putInt("sync_mode", i).apply();
+                    showSyncSettings();
+                }, back));
+        l.add("📐  مزامنة مقاسات الشاشة (الخطوط، أحجام البطاقات…):  " + onOff(prefs.getBoolean("sync_screen", false)));
+        a.add(() -> {
+            prefs.edit().putBoolean("sync_screen", !prefs.getBoolean("sync_screen", false)).apply();
+            showSyncSettings();
+        });
+        l.add("🔄  مزامنة الآن");
+        a.add(() -> {
+            sync.syncNow();
+            toast("جارٍ المزامنة…");
+            handler.postDelayed(this::showSyncSettings, 3500L);
+        });
+        l.add("⬆  اجعل إعداداتي هذه هي الأساس للأجهزة الأخرى");
+        a.add(() -> {
+            prefs.edit().putString("sync_hash", "").putLong("sync_pushed", 0L).apply();
+            sync.syncNow();
+            toast("سيُرسَل بعد لحظات");
+        });
+        l.add("ℹ  الحالة:  " + (sync == null ? "—" : sync.status));
+        a.add(this::showSyncSettings);
+        l.add("📖  طريقة الإعداد خطوة بخطوة");
+        a.add(() -> dialog("إعداد المزامنة والتحكم عن بعد").setMessage(
+                "1) في GitHub أنشئ مستودعاً جديداً «خاصاً» (Private) باسم مثل mawaqit-sync مع ملف README.\n\n"
+                        + "2) Settings ← Developer settings ← Fine-grained tokens ← Generate: اختر هذا المستودع فقط، "
+                        + "وصلاحية Contents = Read and write. انسخ المفتاح.\n\n"
+                        + "3) هنا: ادخل اسم المستودع والمفتاح (من الجوال بالـ QR)، فعّل المزامنة. كرّر على كل جهاز بنفس المفتاح.\n\n"
+                        + "4) للتحكم من أي مكان افتح:\n" + PANEL_URL + "\nوأدخل المستودع والمفتاح مرة واحدة على جوالك.\n\n"
+                        + "كل جهاز يفحص التغييرات كل دقيقة تقريباً. لا تشارك المفتاح مع أحد.")
+                .setPositiveButton("حسناً", (d, w) -> showSyncSettings()).show());
+        menu("☁ المزامنة والتحكم عن بعد", l, a, this::showLauncherSettings);
+    }
+
     // ------------------------------------------------------------------ Quran
 
     private static final String[] SURAHS = {"الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف",
@@ -5025,6 +5257,7 @@ public class MainActivity extends Activity {
         AppLog.info("QURAN", "stopped; returning to previous app: " + (returnToApp && quranReturn));
         resumeNativeVideo();
         if (returnToApp && quranReturn) moveTaskToBack(true);
+        syncAfterIdle();
     }
 
     // ---- schedule editor
@@ -5597,6 +5830,7 @@ public class MainActivity extends Activity {
         AppLog.info("ADHAN", "finished; returning to previous app: " + adhanReturn);
         resumeNativeVideo();
         if (adhanReturn) moveTaskToBack(true);
+        syncAfterIdle();
     }
 
     // ---- audio file from the phone/laptop (upload) or from the device's own file picker
