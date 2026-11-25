@@ -1252,6 +1252,8 @@ public class MainActivity extends Activity {
 
     private int gRow() { return fine("w_f_row", tgt(prefs.getInt("w_rowgap", 1))); }
 
+    private int gLine() { return fine("w_f_line", tgt(0)); }
+
     private int gIn() { return fine("w_f_in", tgt(prefs.getInt("w_inrow", 1))); }
 
     private int padL() { return fine("w_f_padl", wpad()); }
@@ -1406,8 +1408,8 @@ public class MainActivity extends Activity {
                 if (wSub[i].getVisibility() != View.GONE) subW = Math.max(subW, Math.min(wsc(230),
                         (int) Math.ceil(Layout.getDesiredWidth(wSub[i].getText(), wSub[i].getPaint()))));
             }
-            if (oneLine) {                                   // every detail gets its own aligned column
-                int tot = 0, shown = 0;
+            if (oneLine || cols) {                           // every detail gets its own aligned column / own line
+                int tot = 0, shown = 0, widest = 0;
                 for (int k = 0; k < 5; k++) {
                     int mw = 0;
                     for (int i = 0; i < 3 && i < Math.max(1, Math.min(3, prefs.getInt("w_days", 3))); i++) {
@@ -1416,14 +1418,14 @@ public class MainActivity extends Activity {
                                 Layout.getDesiredWidth(wFld[i][k].getText(), wFld[i][k].getPaint())) + 3);
                     }
                     wFldW[k] = mw;
+                    widest = Math.max(widest, mw);
                     if (mw > 0) {
                         tot += mw;
                         shown++;
                     }
                 }
-                subW = tot + Math.max(0, shown - 1) * gSub();
+                subW = cols ? widest : tot + Math.max(0, shown - 1) * gSub();
             }
-            if (cols) subW = Math.min(subW, Math.max(Math.max(dW, Math.max(iW, tW)) + wsc(14), wsc(50)));   // sub text wraps instead of widening the column
             wRowSub = subW;
             wRowDay = dW > 0 ? dW + 3 : wsc(80);
             wRowIcon = iW > 0 ? iW + 3 : wsc(34);
@@ -1499,9 +1501,29 @@ public class MainActivity extends Activity {
             sl2.topMargin = oneLine ? 0 : ir;
             sl2.bottomMargin = lead(wSub[i]);
             wSub[i].setLayoutParams(sl2);
-            wFlds[i].setVisibility(oneLine ? View.VISIBLE : View.GONE);
-            if (oneLine) {
+            wFlds[i].setVisibility(oneLine || cols ? View.VISIBLE : View.GONE);
+            if (cols) {                                      // one TextView per detail: exact, adjustable line gaps
                 wSub[i].setVisibility(View.GONE);
+                wFlds[i].setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                fl.topMargin = ir;
+                wFlds[i].setLayoutParams(fl);
+                boolean firstShown = true;
+                for (int k = 0; k < 5; k++) {
+                    boolean has = wFld[i][k].getText().length() > 0;
+                    setPx(wFld[i][k], dsz());
+                    wFld[i][k].setVisibility(has ? View.VISIBLE : View.GONE);
+                    LinearLayout.LayoutParams kp = new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                    kp.topMargin = (has && !firstShown ? gLine() : 0) + lead(wFld[i][k]);
+                    kp.bottomMargin = lead(wFld[i][k]);
+                    if (has) firstShown = false;
+                    wFld[i][k].setLayoutParams(kp);
+                }
+            } else if (oneLine) {
+                wSub[i].setVisibility(View.GONE);
+                wFlds[i].setOrientation(LinearLayout.HORIZONTAL);
                 LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 fl.leftMargin = fl.rightMargin = gap;
@@ -3468,7 +3490,7 @@ public class MainActivity extends Activity {
             root.addView(tt, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            int maxH = Math.max(dp(160), Math.round(dm.heightPixels * 0.88f) - dp(215));
+            int maxH = Math.max(dp(160), Math.round(dm.heightPixels * 0.92f) - dp(150));
             CapFrame body = new CapFrame(maxH);
             if (adapter != null || multi) {
                 final BaseAdapter ad;
@@ -3508,7 +3530,16 @@ public class MainActivity extends Activity {
                 body.addView(lv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
             } else if (view != null) {
-                body.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                View vv = view;
+                if (!(vv instanceof ScrollView) && !(vv instanceof android.widget.AbsListView)) {
+                    ScrollView vs = new ScrollView(MainActivity.this);      // small phone screens: content scrolls, never clips
+                    vs.setVerticalScrollBarEnabled(false);
+                    vs.setFillViewport(false);
+                    vs.addView(vv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT));
+                    vv = vs;
+                }
+                body.addView(vv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
             } else if (msg != null) {
                 ScrollView sv = new ScrollView(MainActivity.this);
@@ -4518,6 +4549,51 @@ public class MainActivity extends Activity {
         return Math.round(v * unit() * prefs.getInt("cd_size", 100) / 100f);
     }
 
+    private static final String[] CD_COL_NAMES = {"ذهبي", "أبيض", "أخضر فاتح", "أزرق فاتح", "برتقالي", "وردي", "رمادي", "لون الواجهة"};
+    private static final int[] CD_COLS = {0xFFF4C95D, 0xFFFFFFFF, 0xFF7BE0A4, 0xFF8FD3FF, 0xFFFFB066, 0xFFFF8FA3, 0xFFBDBDBD, 0};
+    private static final String[] CD_BG_NAMES = {"حسب لون الواجهة (متدرّج)", "أسود", "أخضر داكن", "أزرق داكن", "بنفسجي داكن", "رمادي داكن"};
+    private static final int[] CD_BGS = {0, 0xFF000000, 0xFF0B2A1C, 0xFF0B1B3F, 0xFF241238, 0xFF222222};
+
+    private int cdCol(String key, int def) {
+        int i = Math.max(0, Math.min(CD_COLS.length - 1, prefs.getInt(key, def)));
+        return CD_COLS[i] == 0 ? acc() : CD_COLS[i];
+    }
+
+    private float cdPct(String key) {
+        return Math.max(30, Math.min(300, prefs.getInt(key, 100))) / 100f;
+    }
+
+    /** Label = small icon + gap + text; icon size and gap are adjustable, the icon can be hidden. */
+    private CharSequence cdLabel(String raw) {
+        int sp = raw.indexOf(' ');
+        if (sp <= 0 || sp > 4) return raw;
+        String icon = raw.substring(0, sp), txt = raw.substring(sp + 1);
+        if (!prefs.getBoolean("cd_icon_show", true)) return txt;
+        final int gapPx = fine("cd_f_icg", csc(4));
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(icon);
+        sb.setSpan(new android.text.style.RelativeSizeSpan(cdPct("cd_icon_pct")), 0, icon.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        int st = sb.length();
+        sb.append(" ");
+        sb.setSpan(new android.text.style.ReplacementSpan() {
+            @Override public int getSize(android.graphics.Paint pp, CharSequence t, int a, int b,
+                                         android.graphics.Paint.FontMetricsInt fm) { return Math.max(0, gapPx); }
+            @Override public void draw(Canvas c, CharSequence t, int a, int b, float x, int top, int y, int bt,
+                                       android.graphics.Paint pp) { }
+        }, st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        sb.append(txt);
+        return sb;
+    }
+
+    private int cdRowW() {
+        return csc(230f * Math.max(40, Math.min(300, prefs.getInt("cd_w", 100))) / 100f);
+    }
+
+    private int cdAlignGravity() {
+        int al = prefs.getInt("cd_align", 1);
+        return al == 0 ? Gravity.RIGHT : al == 2 ? Gravity.LEFT : Gravity.CENTER_HORIZONTAL;
+    }
+
     /** Tabular Islamic calendar (civil). Returns {year, month 1-12, day} for a local date. */
     private int[] gregToHijri(Calendar c, int adjDays) {
         Calendar d = (Calendar) c.clone();
@@ -4661,35 +4737,59 @@ public class MainActivity extends Activity {
         StringBuilder keys = new StringBuilder();
         for (String[] r : rows) keys.append(r[0]).append(',');
         boolean rebuilt = false;
-        if (!keys.toString().equals(cdKeys) || cdCard.getChildCount() != rows.size()) {
+        if (!keys.toString().equals(cdKeys) || cdLab.size() != rows.size()) {
             cdKeys = keys.toString();
             cdCard.removeAllViews();
             cdLab.clear();
             cdVal.clear();
-            int pad = csc(10);
-            cdCard.setPadding(pad, pad - csc(2), pad, pad - csc(2));
+            cdCard.setPadding(fine("cd_f_pl", csc(10)), fine("cd_f_pt", csc(8)),
+                    fine("cd_f_pr", csc(10)), fine("cd_f_pb", csc(8)));
+            cdCard.setGravity(cdAlignGravity());
+            final boolean sep = prefs.getBoolean("cd_sep", false);
             for (String[] r : rows) {
+                if (sep && !cdLab.isEmpty()) {
+                    View line = new View(this);
+                    int a = Math.max(0, Math.min(100, prefs.getInt("cd_sep_a", 60)));
+                    line.setBackgroundColor(withAlpha(cdCol("cd_sep_col", 0), a * 255 / 100));
+                    int th = Math.max(1, Math.round(Math.max(1, prefs.getInt("cd_sep_th", 1)) * getResources().getDisplayMetrics().density / 2f));
+                    int lw = Math.round(cdRowW() * Math.max(10, Math.min(100, prefs.getInt("cd_sep_len", 100))) / 100f);
+                    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(lw, th);
+                    sl.topMargin = fine("cd_f_sep1", csc(3));
+                    sl.bottomMargin = fine("cd_f_sep2", csc(3));
+                    sl.gravity = Gravity.CENTER_HORIZONTAL;
+                    cdCard.addView(line, sl);
+                }
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.VERTICAL);
-                row.setGravity(Gravity.CENTER_HORIZONTAL);
+                row.setGravity(cdAlignGravity());
                 TextView lab = text(11, true);
-                lab.setTextColor(0xFFF4C95D);
+                lab.setTextColor(cdCol("cd_lab_col", 0));
                 lab.setSingleLine(true);
+                lab.setIncludeFontPadding(false);
                 lab.setTextDirection(View.TEXT_DIRECTION_RTL);
-                lab.setGravity(Gravity.CENTER);
+                lab.setGravity(cdAlignGravity());
+                lab.setTypeface(prefs.getBoolean("cd_lab_bold", true) ? tf(true) : tf(false));
                 TextView val = text(15, true);
+                val.setTextColor(cdCol("cd_val_col", 1));
                 val.setSingleLine(false);
+                val.setIncludeFontPadding(false);
                 val.setMaxLines("1".equals(r[3]) ? 2 : 1);
                 val.setTextDirection(View.TEXT_DIRECTION_RTL);
-                val.setGravity(Gravity.CENTER);
+                val.setGravity(cdAlignGravity());
+                val.setTypeface(prefs.getBoolean("cd_val_bold", true) ? tf(true) : tf(false));
+                val.setLineSpacing(fine("cd_f_vls", 0), 1f);
                 cdScaleFonts(lab, val);
+                lab.setText(cdLabel(r[1]));
                 row.addView(lab, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
-                row.addView(val, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT));
-                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(csc(230),
+                LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-                rp.topMargin = cdLab.isEmpty() ? 0 : csc(6);
+                vp.topMargin = fine("cd_f_lv", csc(2));
+                row.addView(val, vp);
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(cdRowW(),
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                rp.topMargin = cdLab.isEmpty() || sep ? 0 : fine("cd_f_rows", csc(6));
+                rp.gravity = cdAlignGravity();
                 cdCard.addView(row, rp);
                 cdLab.add(lab);
                 cdVal.add(val);
@@ -4698,7 +4798,6 @@ public class MainActivity extends Activity {
             rebuilt = true;
         }
         for (int i = 0; i < rows.size() && i < cdVal.size(); i++) {
-            cdLab.get(i).setText(rows.get(i)[1]);
             cdVal.get(i).setText(rows.get(i)[2]);
         }
         cdCard.setVisibility(View.VISIBLE);
@@ -4710,18 +4809,21 @@ public class MainActivity extends Activity {
 
     private void cdScaleFonts(TextView lab, TextView val) {
         float k = Math.max(60, Math.min(200, prefs.getInt("font_pct", 100))) / 100f;
-        lab.setTextSize(TypedValue.COMPLEX_UNIT_PX, csc(11) * k);
-        val.setTextSize(TypedValue.COMPLEX_UNIT_PX, csc(15) * k);
+        lab.setTextSize(TypedValue.COMPLEX_UNIT_PX, csc(11) * k * cdPct("cd_lab_pct"));
+        val.setTextSize(TypedValue.COMPLEX_UNIT_PX, csc(15) * k * cdPct("cd_val_pct"));
     }
 
     private void applyCdStyle() {
         if (cdCard == null) return;
         int a = Math.max(0, Math.min(100, prefs.getInt("cd_alpha", 55)));
         int c0 = paletteColors()[0], c1 = paletteColors()[1];
+        int bi = Math.max(0, Math.min(CD_BGS.length - 1, prefs.getInt("cd_bg", 0)));
+        if (CD_BGS[bi] != 0) { c0 = CD_BGS[bi]; c1 = CD_BGS[bi]; }
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{((a * 255 / 100) << 24) | (c0 & 0xFFFFFF), ((a * 255 / 100) << 24) | (c1 & 0xFFFFFF)});
-        bg.setStroke(Math.max(1, dp(1)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
-        bg.setCornerRadius(csc(16));
+        int bw = prefs.getInt("cd_border", 1);
+        if (bw > 0) bg.setStroke(Math.max(1, dp(bw)), withAlpha(cdCol("cd_border_col", 0), a * 90 / 100 * 255 / 100));
+        bg.setCornerRadius(csc(prefs.getInt("cd_radius", 16)));
         cdCard.setBackground(bg);
     }
 
@@ -4730,10 +4832,10 @@ public class MainActivity extends Activity {
         cdCard.measure(View.MeasureSpec.makeMeasureSpec(sizeW, View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(sizeH, View.MeasureSpec.AT_MOST));
         int cw = cdCard.getMeasuredWidth(), ch = cdCard.getMeasuredHeight();
-        int inset = wsc(14);
+        int mL = fine("cd_f_ml", wsc(14)), mR = fine("cd_f_mr", wsc(14)), mT = fine("cd_f_mt", wsc(14)), mB = fine("cd_f_mb", wsc(14));
         int region = topH > 0 ? topH : sizeH;
-        float tx = inset + Math.max(0, sizeW - cw - 2 * inset) * prefs.getInt("cd_x", 0) / 100f;
-        float ty = inset + Math.max(0, region - ch - 2 * inset) * prefs.getInt("cd_y", 0) / 100f;
+        float tx = mL + Math.max(0, sizeW - cw - mL - mR) * prefs.getInt("cd_x", 0) / 100f;
+        float ty = mT + Math.max(0, region - ch - mT - mB) * prefs.getInt("cd_y", 0) / 100f;
         cdCard.setTranslationX(tx);
         cdCard.setTranslationY(ty);
     }
@@ -4820,7 +4922,142 @@ public class MainActivity extends Activity {
         a.add(() -> numberDialog("حجم بطاقة العدّادات", "cd_size", 100, 40, 220, "%", null, this::cdRefreshNow, back, back));
         l.add("🔆  شفافية البطاقة:  " + prefs.getInt("cd_alpha", 55) + "%");
         a.add(() -> numberDialog("شفافية البطاقة", "cd_alpha", 55, 0, 100, "%", null, this::applyCdStyle, back, back));
+        l.add("🎨  الخطوط والألوان والمحاذاة");
+        a.add(this::showCdFonts);
+        l.add("🔣  الرموز (الأيقونات)");
+        a.add(this::showCdIcons);
+        l.add("➖  الخط الفاصل بين العدّادات");
+        a.add(this::showCdSep);
+        l.add("↔  المسافات والهوامش (داخلي وخارجي)");
+        a.add(this::showCdSpacing);
+        l.add("🖼  الإطار والخلفية والعرض");
+        a.add(this::showCdFrame);
+        l.add("↺  إعادة كل ضبط المظهر إلى التلقائي");
+        a.add(() -> {
+            SharedPreferences.Editor ed = prefs.edit();
+            for (String k : new ArrayList<>(prefs.getAll().keySet()))
+                if (k.startsWith("cd_f_") || k.equals("cd_lab_pct") || k.equals("cd_val_pct") || k.equals("cd_lab_col")
+                        || k.equals("cd_val_col") || k.equals("cd_lab_bold") || k.equals("cd_val_bold") || k.equals("cd_align")
+                        || k.startsWith("cd_icon") || k.startsWith("cd_sep") || k.equals("cd_w") || k.equals("cd_radius")
+                        || k.equals("cd_border") || k.equals("cd_border_col") || k.equals("cd_bg")) ed.remove(k);
+            ed.apply();
+            cdRefreshNow();
+            applyCdStyle();
+            showCountdownSettings();
+        });
         menu("⏳ العدّادات", l, a, this::showLauncherSettings);
+    }
+
+    // --- countdown appearance: small generic helpers
+
+    private void cdNum(List<String> l, List<Runnable> a, String label, final String key, final int def, final int min,
+                       final int max, final String unit, final Runnable back, final boolean fineKey) {
+        l.add(label + ":  " + (prefs.contains(key) ? prefs.getInt(key, def) + unit : (fineKey ? "تلقائي (" + def + ")" : def + unit)));
+        a.add(() -> numberDialog(label, key, def, min, max, unit, null, () -> {
+            cdRefreshNow();
+            applyCdStyle();
+        }, back, back));
+    }
+
+    private void cdColor(List<String> l, List<Runnable> a, String label, final String key, final int def,
+                         final String[] names, final Runnable back) {
+        int cur = Math.max(0, Math.min(names.length - 1, prefs.getInt(key, def)));
+        l.add(label + ":  " + names[cur]);
+        a.add(() -> choice(label, names, Math.max(0, Math.min(names.length - 1, prefs.getInt(key, def))), i -> {
+            prefs.edit().putInt(key, i).apply();
+            cdRefreshNow();
+            applyCdStyle();
+            back.run();
+        }, back));
+    }
+
+    private void cdToggle(List<String> l, List<Runnable> a, String label, final String key, final boolean def, final Runnable back) {
+        l.add(label + ":  " + onOff(prefs.getBoolean(key, def)));
+        a.add(() -> {
+            prefs.edit().putBoolean(key, !prefs.getBoolean(key, def)).apply();
+            cdRefreshNow();
+            applyCdStyle();
+            back.run();
+        });
+    }
+
+    private void showCdFonts() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showCdFonts;
+        cdNum(l, a, "حجم خط العنوان (باقي على…)", "cd_lab_pct", 100, 40, 300, "%", back, false);
+        cdNum(l, a, "حجم خط الأرقام (المدّة)", "cd_val_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون العنوان", "cd_lab_col", 0, CD_COL_NAMES, back);
+        cdColor(l, a, "لون الأرقام", "cd_val_col", 1, CD_COL_NAMES, back);
+        cdToggle(l, a, "خط العنوان عريض", "cd_lab_bold", true, back);
+        cdToggle(l, a, "خط الأرقام عريض", "cd_val_bold", true, back);
+        l.add("↔  محاذاة النص:  " + new String[]{"يمين", "وسط", "يسار"}[Math.max(0, Math.min(2, prefs.getInt("cd_align", 1)))]);
+        a.add(() -> choice("محاذاة النص", new String[]{"يمين", "وسط", "يسار"}, prefs.getInt("cd_align", 1), i -> {
+            prefs.edit().putInt("cd_align", i).apply();
+            cdRefreshNow();
+            back.run();
+        }, back));
+        menu("🎨 الخطوط والألوان", l, a, this::showCountdownSettings);
+    }
+
+    private void showCdIcons() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showCdIcons;
+        cdToggle(l, a, "إظهار الرموز (🌙 🎉 🐑 …)", "cd_icon_show", true, back);
+        cdNum(l, a, "حجم الرمز نسبةً للنص", "cd_icon_pct", 100, 40, 300, "%", back, false);
+        cdNum(l, a, "المسافة بين الرمز والنص", "cd_f_icg", fineSteps(csc(4)), -20, 80, "", back, true);
+        menu("🔣 الرموز", l, a, this::showCountdownSettings);
+    }
+
+    private void showCdSep() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showCdSep;
+        cdToggle(l, a, "إظهار خط بين العدّادات", "cd_sep", false, back);
+        cdNum(l, a, "سماكة الخط", "cd_sep_th", 1, 1, 16, "", back, false);
+        cdNum(l, a, "طول الخط (من عرض العدّاد)", "cd_sep_len", 100, 10, 100, "%", back, false);
+        cdNum(l, a, "شفافية الخط", "cd_sep_a", 60, 5, 100, "%", back, false);
+        cdColor(l, a, "لون الخط", "cd_sep_col", 0, CD_COL_NAMES, back);
+        cdNum(l, a, "المسافة فوق الخط", "cd_f_sep1", fineSteps(csc(3)), -20, 120, "", back, true);
+        cdNum(l, a, "المسافة تحت الخط", "cd_f_sep2", fineSteps(csc(3)), -20, 120, "", back, true);
+        menu("➖ الخط الفاصل", l, a, this::showCountdownSettings);
+    }
+
+    private void showCdSpacing() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showCdSpacing;
+        l.add("— هامش داخلي (بين الحدّ والنص) —");
+        a.add(back);
+        cdNum(l, a, "داخلي: أعلى", "cd_f_pt", fineSteps(csc(8)), -20, 150, "", back, true);
+        cdNum(l, a, "داخلي: أسفل", "cd_f_pb", fineSteps(csc(8)), -20, 150, "", back, true);
+        cdNum(l, a, "داخلي: يسار", "cd_f_pl", fineSteps(csc(10)), -20, 150, "", back, true);
+        cdNum(l, a, "داخلي: يمين", "cd_f_pr", fineSteps(csc(10)), -20, 150, "", back, true);
+        l.add("— هامش خارجي (بين البطاقة وحافة الشاشة) —");
+        a.add(back);
+        cdNum(l, a, "خارجي: أعلى", "cd_f_mt", fineSteps(wsc(14)), 0, 300, "", back, true);
+        cdNum(l, a, "خارجي: أسفل", "cd_f_mb", fineSteps(wsc(14)), 0, 300, "", back, true);
+        cdNum(l, a, "خارجي: يسار", "cd_f_ml", fineSteps(wsc(14)), 0, 300, "", back, true);
+        cdNum(l, a, "خارجي: يمين", "cd_f_mr", fineSteps(wsc(14)), 0, 300, "", back, true);
+        l.add("— بين العناصر —");
+        a.add(back);
+        cdNum(l, a, "بين العنوان والأرقام", "cd_f_lv", fineSteps(csc(2)), -30, 100, "", back, true);
+        cdNum(l, a, "بين سطري الأرقام (الأيام ↔ الساعات)", "cd_f_vls", 0, -30, 100, "", back, true);
+        cdNum(l, a, "بين العدّادات (عند عدم وجود خط)", "cd_f_rows", fineSteps(csc(6)), -20, 150, "", back, true);
+        menu("↔ المسافات والهوامش", l, a, this::showCountdownSettings);
+    }
+
+    private void showCdFrame() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showCdFrame;
+        cdNum(l, a, "عرض البطاقة", "cd_w", 100, 40, 300, "%", back, false);
+        cdNum(l, a, "استدارة الزوايا", "cd_radius", 16, 0, 60, "", back, false);
+        cdNum(l, a, "سماكة الإطار (0 = بدون)", "cd_border", 1, 0, 10, "", back, false);
+        cdColor(l, a, "لون الإطار", "cd_border_col", 0, CD_COL_NAMES, back);
+        cdColor(l, a, "لون الخلفية", "cd_bg", 0, CD_BG_NAMES, back);
+        menu("🖼 الإطار والخلفية", l, a, this::showCountdownSettings);
     }
 
     // ------------------------------------------------------------------ Silent / vibrate / do-not-disturb
@@ -4890,7 +5127,7 @@ public class MainActivity extends Activity {
         if (!prefs.getBoolean("sync_screen", false)) {
             switch (k) {
                 case "font_pct": case "w_size": case "w_font": case "cd_size": case "icon_fill": case "page_vw":
-                case "norm_ui": case "rows": case "fit":
+                case "norm_ui": case "rows": case "fit": case "cd_w":
                     return true;
                 default:
             }
@@ -6545,12 +6782,12 @@ public class MainActivity extends Activity {
         final String[][] items = {
                 {"w_f_dayicon", "اسم اليوم ↔ الأيقونة"}, {"w_f_icontemp", "الأيقونة ↔ الحرارة"},
                 {"w_f_sub", "الحرارة ↔ التفاصيل (مطر/رياح…)"}, {"w_f_col", "بين أعمدة الأيام"},
-                {"w_f_row", "بين صفوف الأيام"}, {"w_f_in", "بين الأسطر داخل اليوم"},
+                {"w_f_row", "بين صفوف الأيام"}, {"w_f_in", "فوق التفاصيل (بعد الحرارة)"}, {"w_f_line", "بين أسطر التفاصيل (رطوبة/مطر…)"},
                 {"w_f_cgap", "بين «مدينتك الحالية» واسم المدينة"}, {"w_f_head1", "تحت المدينة (فوق الخط)"}, {"w_f_head2", "تحت الخط (فوق الأيام)"},
                 {"w_f_padt", "هامش البطاقة: أعلى"}, {"w_f_padb", "هامش البطاقة: أسفل"},
                 {"w_f_padl", "هامش البطاقة: يسار"}, {"w_f_padr", "هامش البطاقة: يمين"}};
         final int[] autoVals = {fineSteps(gDayIcon()), fineSteps(gIconTemp()), fineSteps(gSub()), fineSteps(gCol()),
-                fineSteps(gRow()), fineSteps(gIn()), fineSteps(gCity()), fineSteps(tgt(5)), fineSteps(tgt(3)), fineSteps(padT()),
+                fineSteps(gRow()), fineSteps(gIn()), fineSteps(gLine()), fineSteps(gCity()), fineSteps(tgt(5)), fineSteps(tgt(3)), fineSteps(padT()),
                 fineSteps(padB()), fineSteps(padL()), fineSteps(padR())};
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
