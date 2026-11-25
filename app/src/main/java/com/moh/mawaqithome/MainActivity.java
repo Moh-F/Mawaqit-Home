@@ -16,6 +16,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Enumeration;
+import java.util.GregorianCalendar;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.IntentFilter;
@@ -593,6 +594,7 @@ public class MainActivity extends Activity {
 
         webView.loadUrl(url);                      // start the network as early as possible
         buildWeatherCard();
+        buildCdCard();
         buildStrip();
         buildBubble();
         buildRail();
@@ -765,6 +767,7 @@ public class MainActivity extends Activity {
     };
 
     private void applyWeatherVis(boolean animate) {
+        applyCdVis(animate);
         if (weatherCard == null || !prefs.getBoolean("w_show", true)) return;
         boolean visible = (pageMain || !prefs.getBoolean("w_hide_adhan", true));
         int pcl = prefs.getInt("sv_clear", 0);
@@ -1561,6 +1564,7 @@ public class MainActivity extends Activity {
         weatherCard.setTranslationY(ty);
         AppLog.info("WEATHER", "card " + cw + "x" + ch + " at " + Math.round(tx) + "," + Math.round(ty)
                 + " (screen " + sizeW + "x" + sizeH + ")");
+        positionCd();
     }
 
     private void applyWeatherStyle() {
@@ -4029,6 +4033,13 @@ public class MainActivity extends Activity {
         a.add(this::promptUrl);
         l.add("🕌  الأذان وصوت المؤذن:  " + onOff(prefs.getBoolean("adhan_on", false)));
         a.add(this::showAdhanSettings);
+        l.add("⏳  العدّادات (رمضان، العيد، الفجر والمغرب، أحداثي):  " + onOff(prefs.getBoolean("cd_show", false)));
+        a.add(this::showCountdownSettings);
+        l.add("🔕  احترام وضع الصامت والاهتزاز وعدم الإزعاج (للجوالات):  " + onOff(prefs.getBoolean("respect_ringer", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("respect_ringer", !prefs.getBoolean("respect_ringer", true)).apply();
+            showLauncherSettings();
+        });
         l.add("📖  القرآن الكريم (جدولة القراءة آية بآية):  "
                 + onOff(prefs.getBoolean("quran_on", true) && QuranSched.items(prefs).length() > 0));
         a.add(this::showQuranSettings);
@@ -4489,6 +4500,355 @@ public class MainActivity extends Activity {
                 .setNegativeButton("إلغاء", null).show();
     }
 
+    // ------------------------------------------------------------------ Countdown card
+
+    private static final String[] HIJRI_MONTHS = {"محرم", "صفر", "ربيع الأول", "ربيع الآخر", "جمادى الأولى", "جمادى الآخرة",
+            "رجب", "شعبان", "رمضان", "شوال", "ذو القعدة", "ذو الحجة"};
+
+    private LinearLayout cdCard;
+    private final List<TextView> cdLab = new ArrayList<>(), cdVal = new ArrayList<>();
+    private String cdKeys = "";
+
+    private int csc(float v) {
+        return Math.round(v * unit() * prefs.getInt("cd_size", 100) / 100f);
+    }
+
+    /** Tabular Islamic calendar (civil). Returns {year, month 1-12, day} for a local date. */
+    private int[] gregToHijri(Calendar c, int adjDays) {
+        Calendar d = (Calendar) c.clone();
+        d.add(Calendar.DAY_OF_YEAR, adjDays);
+        GregorianCalendar u0 = new GregorianCalendar(java.util.TimeZone.getTimeZone("UTC"));
+        u0.clear();
+        u0.set(d.get(Calendar.YEAR), d.get(Calendar.MONTH), d.get(Calendar.DAY_OF_MONTH), 0, 0, 0);
+        long epochDay = u0.getTimeInMillis() / 86_400_000L;
+        long jd = epochDay + 2440588L;
+        long l = jd - 1948440L + 10632L;
+        long n = (l - 1) / 10631L;
+        l = l - 10631L * n + 354L;
+        long j = ((10985L - l) / 5316L) * ((50L * l) / 17719L) + (l / 5670L) * ((43L * l) / 15238L);
+        l = l - ((30L - j) / 15L) * ((17719L * j) / 50L) - (j / 16L) * ((15238L * j) / 43L) + 29L;
+        long m = (24L * l) / 709L;
+        long dd = l - (709L * m) / 24L;
+        long y = 30L * n + j - 30L;
+        return new int[]{(int) y, (int) m, (int) dd};
+    }
+
+    /** Local midnight (millis) of a Hijri date. */
+    private long hijriToMillis(int y, int m, int d, int adjDays) {
+        long jdn = d + (long) Math.ceil(29.5 * (m - 1)) + (y - 1) * 354L + (3L + 11L * y) / 30L + 1948440L - 1L;
+        long epochDay = jdn - 2440588L;
+        GregorianCalendar u = new GregorianCalendar(java.util.TimeZone.getTimeZone("UTC"));
+        u.setTimeInMillis(epochDay * 86_400_000L);
+        Calendar c = Calendar.getInstance();
+        c.clear();
+        c.set(u.get(Calendar.YEAR), u.get(Calendar.MONTH), u.get(Calendar.DAY_OF_MONTH), 0, 0, 0);
+        c.add(Calendar.DAY_OF_YEAR, -adjDays);
+        return c.getTimeInMillis();
+    }
+
+    private String hijriToday() {
+        int[] h = gregToHijri(Calendar.getInstance(), prefs.getInt("hijri_adj", 0));
+        return h[2] + " " + HIJRI_MONTHS[Math.max(1, Math.min(12, h[1])) - 1] + " " + h[0] + " هـ";
+    }
+
+    /** Next 1st/10th of a Hijri month strictly in the future (millis). */
+    private long nextHijri(int month, int day) {
+        int adj = prefs.getInt("hijri_adj", 0);
+        int[] h = gregToHijri(Calendar.getInstance(), adj);
+        long now = System.currentTimeMillis();
+        for (int y = h[0]; y <= h[0] + 2; y++) {
+            long t = hijriToMillis(y, month, day, adj);
+            if (t > now) return t;
+        }
+        return now;
+    }
+
+    private String remaining(long target, boolean full) {
+        Calendar now = Calendar.getInstance(), tgt = Calendar.getInstance();
+        tgt.setTimeInMillis(target);
+        if (!tgt.after(now)) return "—";
+        int months = 0;
+        Calendar t = (Calendar) now.clone();
+        while (months < 24) {
+            Calendar t2 = (Calendar) t.clone();
+            t2.add(Calendar.MONTH, 1);
+            if (t2.after(tgt)) break;
+            t = t2;
+            months++;
+        }
+        long ms = tgt.getTimeInMillis() - t.getTimeInMillis();
+        long days = ms / 86_400_000L, hrs = ms / 3_600_000L % 24, mins = ms / 60_000L % 60, secs = ms / 1000L % 60;
+        if (!full) return (days * 24 + hrs) + " ساعة  " + mins + " دقيقة";
+        return (months > 0 ? months + " شهر  " : "") + days + " يوم\n" + hrs + " ساعة  " + mins + " دقيقة  " + secs + " ثانية";
+    }
+
+    private long nextPrayer(int idx) {
+        int[] t = WakeScheduler.load(prefs);
+        if (t == null) return 0L;
+        Calendar c = Calendar.getInstance();
+        c.set(Calendar.HOUR_OF_DAY, 0);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        c.add(Calendar.MINUTE, t[idx]);
+        if (c.getTimeInMillis() <= System.currentTimeMillis()) c.add(Calendar.DAY_OF_YEAR, 1);
+        return c.getTimeInMillis();
+    }
+
+    /** {key, label, value, full?"1":"0"} for every row that should be shown now. */
+    private List<String[]> cdRows() {
+        List<String[]> r = new ArrayList<>();
+        int adj = prefs.getInt("hijri_adj", 0);
+        int hm = gregToHijri(Calendar.getInstance(), adj)[1];
+        if (prefs.getBoolean("cd_ramadan", true) && hm != 9)
+            r.add(new String[]{"ram", "🌙 باقي على رمضان", remaining(nextHijri(9, 1), true), "1"});
+        if (prefs.getBoolean("cd_fitr", true))
+            r.add(new String[]{"fitr", "🎉 باقي على عيد الفطر", remaining(nextHijri(10, 1), true), "1"});
+        if (prefs.getBoolean("cd_adha", true))
+            r.add(new String[]{"adha", "🐑 باقي على عيد الأضحى", remaining(nextHijri(12, 10), true), "1"});
+        boolean showPray = !prefs.getBoolean("cd_pray_ramadan", true) || hm == 9;
+        if (showPray && prefs.getBoolean("cd_fajr", true) && nextPrayer(0) > 0)
+            r.add(new String[]{"fajr", "🌅 باقي للفجر", remaining(nextPrayer(0), false), "0"});
+        if (showPray && prefs.getBoolean("cd_maghrib", true) && nextPrayer(3) > 0)
+            r.add(new String[]{"mag", "🌇 باقي للمغرب", remaining(nextPrayer(3), false), "0"});
+        try {
+            JSONArray ev = new JSONArray(prefs.getString("cd_events", "[]"));
+            for (int i = 0; i < ev.length(); i++) {
+                JSONObject o = ev.getJSONObject(i);
+                if (o.optLong("ts") > System.currentTimeMillis() && o.optBoolean("on", true))
+                    r.add(new String[]{"ev" + o.optLong("id"), "⏳ " + o.optString("t"), remaining(o.optLong("ts"), true), "1"});
+            }
+        } catch (Exception ignored) {
+        }
+        return r;
+    }
+
+    private void buildCdCard() {
+        cdCard = new LinearLayout(this);
+        cdCard.setOrientation(LinearLayout.VERTICAL);
+        cdCard.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        cdCard.setVisibility(View.GONE);
+        shiftLayer.addView(cdCard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT));
+        handler.post(cdTick);
+    }
+
+    private final Runnable cdTick = new Runnable() {
+        @Override
+        public void run() {
+            if (destroyed) return;
+            try {
+                cdUpdate();
+            } catch (Exception e) {
+                AppLog.error("COUNTDOWN", "update failed", e);
+            }
+            handler.postDelayed(this, 1000L);
+        }
+    };
+
+    private void cdUpdate() {
+        if (cdCard == null) return;
+        List<String[]> rows = prefs.getBoolean("cd_show", false) ? cdRows() : new ArrayList<String[]>();
+        if (rows.isEmpty()) {
+            cdCard.setVisibility(View.GONE);
+            return;
+        }
+        StringBuilder keys = new StringBuilder();
+        for (String[] r : rows) keys.append(r[0]).append(',');
+        boolean rebuilt = false;
+        if (!keys.toString().equals(cdKeys) || cdCard.getChildCount() != rows.size()) {
+            cdKeys = keys.toString();
+            cdCard.removeAllViews();
+            cdLab.clear();
+            cdVal.clear();
+            int pad = csc(10);
+            cdCard.setPadding(pad, pad - csc(2), pad, pad - csc(2));
+            for (String[] r : rows) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.VERTICAL);
+                row.setGravity(Gravity.CENTER_HORIZONTAL);
+                TextView lab = text(11, true);
+                lab.setTextColor(0xFFF4C95D);
+                lab.setSingleLine(true);
+                lab.setTextDirection(View.TEXT_DIRECTION_RTL);
+                lab.setGravity(Gravity.CENTER);
+                TextView val = text(15, true);
+                val.setSingleLine(false);
+                val.setMaxLines("1".equals(r[3]) ? 2 : 1);
+                val.setTextDirection(View.TEXT_DIRECTION_RTL);
+                val.setGravity(Gravity.CENTER);
+                cdScaleFonts(lab, val);
+                row.addView(lab, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                row.addView(val, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(csc(230),
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                rp.topMargin = cdLab.isEmpty() ? 0 : csc(6);
+                cdCard.addView(row, rp);
+                cdLab.add(lab);
+                cdVal.add(val);
+            }
+            applyCdStyle();
+            rebuilt = true;
+        }
+        for (int i = 0; i < rows.size() && i < cdVal.size(); i++) {
+            cdLab.get(i).setText(rows.get(i)[1]);
+            cdVal.get(i).setText(rows.get(i)[2]);
+        }
+        cdCard.setVisibility(View.VISIBLE);
+        if (rebuilt) {
+            positionCd();
+            applyCdVis(false);
+        }
+    }
+
+    private void cdScaleFonts(TextView lab, TextView val) {
+        float k = Math.max(60, Math.min(200, prefs.getInt("font_pct", 100))) / 100f;
+        lab.setTextSize(TypedValue.COMPLEX_UNIT_PX, csc(11) * k);
+        val.setTextSize(TypedValue.COMPLEX_UNIT_PX, csc(15) * k);
+    }
+
+    private void applyCdStyle() {
+        if (cdCard == null) return;
+        int a = Math.max(0, Math.min(100, prefs.getInt("cd_alpha", 55)));
+        int c0 = paletteColors()[0], c1 = paletteColors()[1];
+        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{((a * 255 / 100) << 24) | (c0 & 0xFFFFFF), ((a * 255 / 100) << 24) | (c1 & 0xFFFFFF)});
+        bg.setStroke(Math.max(1, dp(1)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
+        bg.setCornerRadius(csc(16));
+        cdCard.setBackground(bg);
+    }
+
+    private void positionCd() {
+        if (cdCard == null || sizeW <= 0) return;
+        cdCard.measure(View.MeasureSpec.makeMeasureSpec(sizeW, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(sizeH, View.MeasureSpec.AT_MOST));
+        int cw = cdCard.getMeasuredWidth(), ch = cdCard.getMeasuredHeight();
+        int inset = wsc(14);
+        int region = topH > 0 ? topH : sizeH;
+        float tx = inset + Math.max(0, sizeW - cw - 2 * inset) * prefs.getInt("cd_x", 0) / 100f;
+        float ty = inset + Math.max(0, region - ch - 2 * inset) * prefs.getInt("cd_y", 0) / 100f;
+        cdCard.setTranslationX(tx);
+        cdCard.setTranslationY(ty);
+    }
+
+    private void applyCdVis(boolean animate) {
+        if (cdCard == null) return;
+        boolean visible = pageMain || !prefs.getBoolean("w_hide_adhan", true);
+        int pcl = prefs.getInt("sv_clear", 0);
+        float full = (stage >= 1 && stage <= 2 && pcl > 0) ? 1f - pcl / 100f : 1f;
+        cdCard.animate().alpha(visible ? full : 0f).setDuration(animate ? ms(600L) : 0L).start();
+    }
+
+    private void cdRefreshNow() {
+        cdKeys = "";
+        cdUpdate();
+        positionCd();
+    }
+
+    private void showCountdownSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showCountdownSettings;
+        final String[][] tg = {{"cd_show", "⏳  بطاقة العدّادات", "0"}, {"cd_ramadan", "🌙  العدّاد لرمضان", "1"},
+                {"cd_fitr", "🎉  العدّاد لعيد الفطر", "1"}, {"cd_adha", "🐑  العدّاد لعيد الأضحى", "1"},
+                {"cd_fajr", "🌅  العدّاد للفجر (السحور)", "1"}, {"cd_maghrib", "🌇  العدّاد للمغرب (الإفطار)", "1"},
+                {"cd_pray_ramadan", "🕌  عدّادا الفجر والمغرب في رمضان فقط", "1"}};
+        for (final String[] t : tg) {
+            l.add(t[1] + ":  " + onOff(prefs.getBoolean(t[0], "1".equals(t[2]))));
+            a.add(() -> {
+                prefs.edit().putBoolean(t[0], !prefs.getBoolean(t[0], "1".equals(t[2]))).apply();
+                cdRefreshNow();
+                showCountdownSettings();
+            });
+        }
+        l.add("📅  التاريخ الهجري اليوم:  " + hijriToday() + "   (تصحيح: " + prefs.getInt("hijri_adj", 0) + " يوم)");
+        a.add(() -> choice("تصحيح التاريخ الهجري (إن اختلف عن إعلان بلدك)",
+                new String[]{"−2 يوم", "−1 يوم", "بلا تصحيح", "+1 يوم", "+2 يوم"}, prefs.getInt("hijri_adj", 0) + 2, i -> {
+                    prefs.edit().putInt("hijri_adj", i - 2).apply();
+                    cdRefreshNow();
+                    showCountdownSettings();
+                }, back));
+        l.add("➕  إضافة حدث (عنوان وتاريخ)");
+        a.add(() -> promptText("عنوان الحدث", "مثال: سفر، عيد ميلاد", "", title -> promptText(
+                "تاريخ ووقت الحدث بالصيغة: 2026-12-31 20:00", "2026-12-31 20:00", "", v -> {
+                    try {
+                        java.util.Date d = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).parse(v.trim());
+                        JSONArray ev = new JSONArray(prefs.getString("cd_events", "[]"));
+                        ev.put(new JSONObject().put("id", System.currentTimeMillis()).put("t", title.trim())
+                                .put("ts", d.getTime()).put("on", true));
+                        prefs.edit().putString("cd_events", ev.toString()).apply();
+                        cdRefreshNow();
+                    } catch (Exception e) {
+                        toast("الصيغة غير صحيحة — اكتب مثل 2026-12-31 20:00");
+                    }
+                    showCountdownSettings();
+                })));
+        try {
+            final JSONArray ev = new JSONArray(prefs.getString("cd_events", "[]"));
+            for (int i = 0; i < ev.length(); i++) {
+                final JSONObject o = ev.getJSONObject(i);
+                final int idx = i;
+                l.add("🗑  " + o.optString("t") + "  —  " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",
+                        java.util.Locale.US).format(new java.util.Date(o.optLong("ts"))) + "  (اضغط للحذف)");
+                a.add(() -> {
+                    try {
+                        JSONArray out = new JSONArray();
+                        for (int k = 0; k < ev.length(); k++) if (k != idx) out.put(ev.get(k));
+                        prefs.edit().putString("cd_events", out.toString()).apply();
+                    } catch (Exception ignored) {
+                    }
+                    cdRefreshNow();
+                    showCountdownSettings();
+                });
+            }
+        } catch (Exception ignored) {
+        }
+        l.add("↔  الإزاحة الأفقية:  " + prefs.getInt("cd_x", 0) + "%");
+        a.add(() -> numberDialog("الإزاحة الأفقية (0 = يسار، 100 = يمين)", "cd_x", 0, 0, 100, "%", null,
+                this::positionCd, back, back));
+        l.add("↕  الإزاحة الرأسية:  " + prefs.getInt("cd_y", 0) + "%");
+        a.add(() -> numberDialog("الإزاحة الرأسية (0 = أعلى، 100 = أسفل)", "cd_y", 0, 0, 100, "%", null,
+                this::positionCd, back, back));
+        l.add("🔲  حجم البطاقة:  " + prefs.getInt("cd_size", 100) + "%");
+        a.add(() -> numberDialog("حجم بطاقة العدّادات", "cd_size", 100, 40, 220, "%", null, this::cdRefreshNow, back, back));
+        l.add("🔆  شفافية البطاقة:  " + prefs.getInt("cd_alpha", 55) + "%");
+        a.add(() -> numberDialog("شفافية البطاقة", "cd_alpha", 55, 0, 100, "%", null, this::applyCdStyle, back, back));
+        menu("⏳ العدّادات", l, a, this::showLauncherSettings);
+    }
+
+    // ------------------------------------------------------------------ Silent / vibrate / do-not-disturb
+
+    /** 0 = play normally, 1 = vibrate only, 2 = stay silent. TVs always play. */
+    private int soundMode() {
+        if (!prefs.getBoolean("respect_ringer", true) || isTvDevice(this)) return 0;
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            int rm = am.getRingerMode();
+            boolean dnd = false;
+            if (Build.VERSION.SDK_INT >= 23) {
+                android.app.NotificationManager nm = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                int f = nm.getCurrentInterruptionFilter();
+                dnd = f != android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+                        && f != android.app.NotificationManager.INTERRUPTION_FILTER_UNKNOWN;
+            }
+            if (rm == android.media.AudioManager.RINGER_MODE_SILENT || dnd) return 2;
+            if (rm == android.media.AudioManager.RINGER_MODE_VIBRATE) return 1;
+        } catch (Exception e) {
+            AppLog.error("SOUND", "ringer check failed", e);
+        }
+        return 0;
+    }
+
+    private void vibrateAlert() {
+        try {
+            android.os.Vibrator v = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (v != null && v.hasVibrator()) v.vibrate(new long[]{0, 700, 300, 700, 300, 700}, -1);
+        } catch (Exception ignored) {
+        }
+    }
+
     // ------------------------------------------------------------------ Quran
 
     private static final String[] SURAHS = {"الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف",
@@ -4538,6 +4898,10 @@ public class MainActivity extends Activity {
             return;
         }
         quranRetry = 0;
+        if (!test && soundMode() != 0) {
+            AppLog.info("QURAN", "not played: phone is silent / vibrate / do-not-disturb");
+            return;
+        }
         if (!test) {
             String key = o.optLong("id") + "@" + System.currentTimeMillis() / (10 * 60_000L);
             if (key.equals(prefs.getString("quran_last", ""))) return;
@@ -5002,6 +5366,12 @@ public class MainActivity extends Activity {
                     + "-" + idx;
             if (key.equals(prefs.getString("adhan_last", ""))) return;
             prefs.edit().putString("adhan_last", key).apply();
+            int sm = soundMode();
+            if (sm != 0) {                                     // phone on vibrate / silent / do-not-disturb
+                AppLog.info("ADHAN", "not played: sound mode " + sm);
+                if (sm == 1) vibrateAlert();
+                return;
+            }
         }
         adhanReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test;
         adhanRunning = true;
@@ -5022,8 +5392,13 @@ public class MainActivity extends Activity {
         if (railOpen) closeRail(false);
         if (sizeH > 0) applyStage(0, false);
         pauseNativeVideo();
-        final String fajrUrl = prefs.getString("adhan_fajr_url", "");
-        final String u = idx == 0 && !fajrUrl.isEmpty() ? fajrUrl : prefs.getString("adhan_url", "");
+        String pick = "";
+        if (idx >= 0 && idx <= 4) {
+            if (idx == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY)
+                pick = prefs.getString("adhan_fri_url", "");
+            if (pick.isEmpty()) pick = prefs.getString(adhanKey(idx), "");
+        }
+        final String u = !pick.isEmpty() ? pick : prefs.getString("adhan_url", "");
         if (u.isEmpty()) {
             toast("لم تُحدَّد نغمة أذان — الإعدادات ← الأذان");
             afterAdhan();
@@ -5426,8 +5801,8 @@ public class MainActivity extends Activity {
         });
         l.add("🎙  صوت المؤذن:  " + adhanName());
         a.add(this::showAdhanSound);
-        l.add("🌅  أذان الفجر:  " + fajrName());
-        a.add(this::showFajrSound);
+        l.add("🕌  أذان خاص بكل صلاة (الفجر، الظهر… والجمعة)");
+        a.add(this::showPerPrayerAdhan);
         l.add("🔊  مستوى صوت الأذان:  " + prefs.getInt("adhan_vol", 80) + "%  (ويُضبط صوت التلفاز أيضاً)");
         a.add(() -> numberDialog("مستوى صوت الأذان", "adhan_vol", 80, 5, 100, "%", null, null, back, back));
         l.add("🤲  دعاء بعد الأذان (نصاً على الشاشة):  " + onOff(prefs.getBoolean("adhan_dua_show", true)));
@@ -5530,6 +5905,10 @@ public class MainActivity extends Activity {
     }
 
     private void addAdhan(String name, String url, boolean select) {
+        addAdhan(name, url, select ? "adhan_url" : "adhan_fajr_url");
+    }
+
+    private void addAdhan(String name, String url, String targetKey) {
         try {
             org.json.JSONArray ar = adhanList();
             boolean have = false;
@@ -5541,7 +5920,7 @@ public class MainActivity extends Activity {
                 o.put("u", url);
                 ar.put(o);
             }
-            prefs.edit().putString("adhan_list", ar.toString()).putString(select ? "adhan_url" : "adhan_fajr_url", url).apply();
+            prefs.edit().putString("adhan_list", ar.toString()).putString(targetKey, url).apply();
         } catch (Exception e) {
             AppLog.error("ADHAN", "save list", e);
         }
@@ -5583,8 +5962,12 @@ public class MainActivity extends Activity {
         menu("🎙 صوت المؤذن", l, a, this::showAdhanSettings);
     }
 
-    private String fajrName() {
-        String u = prefs.getString("adhan_fajr_url", "");
+    private String adhanKey(int idx) {
+        return idx == 0 ? "adhan_fajr_url" : "adhan_p_" + idx;
+    }
+
+    private String soundNameOf(String key) {
+        String u = prefs.getString(key, "");
         if (u.isEmpty()) return "نفس أذان بقية الصلوات";
         org.json.JSONArray ar = adhanList();
         for (int i = 0; i < ar.length(); i++)
@@ -5592,32 +5975,47 @@ public class MainActivity extends Activity {
         return "مخصص";
     }
 
-    private void showFajrSound() {
+    /** Which adhan for which prayer (and the Friday adhan). */
+    private void showPerPrayerAdhan() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            final int idx = i;
+            l.add("🕌  " + PRAYER_NAMES[i] + ":  " + soundNameOf(adhanKey(i)));
+            a.add(() -> showPrayerSound(adhanKey(idx), "أذان " + PRAYER_NAMES[idx]));
+        }
+        l.add("🕌  أذان الجمعة (بدل أذان الظهر يوم الجمعة):  " + soundNameOf("adhan_fri_url"));
+        a.add(() -> showPrayerSound("adhan_fri_url", "أذان الجمعة"));
+        menu("🕌 أذان لكل صلاة", l, a, this::showAdhanSettings);
+    }
+
+    private void showPrayerSound(final String key, final String title) {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final org.json.JSONArray ar = adhanList();
-        final String cur = prefs.getString("adhan_fajr_url", "");
-        l.add((cur.isEmpty() ? "✔  " : "○  ") + "نفس أذان بقية الصلوات");
+        final String cur = prefs.getString(key, "");
+        final Runnable again = () -> showPrayerSound(key, title);
+        l.add((cur.isEmpty() ? "✔  " : "○  ") + "نفس الأذان العام");
         a.add(() -> {
-            prefs.edit().remove("adhan_fajr_url").apply();
-            showFajrSound();
+            prefs.edit().remove(key).apply();
+            again.run();
         });
         for (int i = 0; i < ar.length(); i++) {
             final org.json.JSONObject o = ar.optJSONObject(i);
             if (o == null) continue;
             l.add((o.optString("u").equals(cur) ? "✔  " : "○  ") + o.optString("n"));
             a.add(() -> {
-                prefs.edit().putString("adhan_fajr_url", o.optString("u")).apply();
-                toast("أذان الفجر: " + o.optString("n"));
-                showFajrSound();
+                prefs.edit().putString(key, o.optString("u")).apply();
+                toast(title + ": " + o.optString("n"));
+                again.run();
             });
         }
-        l.add("➕  إضافة أذان فجر من المكتبة أو ملف أو رابط");
-        a.add(() -> pickAudioSource("إضافة أذان للفجر", v -> {
-            addAdhan(soundLabel(v), v, false);
-            showFajrSound();
-        }, this::showFajrSound));
-        menu("🌅 أذان الفجر", l, a, this::showAdhanSettings);
+        l.add("➕  إضافة صوت من المكتبة أو ملف أو رابط");
+        a.add(() -> pickAudioSource("إضافة " + title, v -> {
+            addAdhan(soundLabel(v), v, key);
+            again.run();
+        }, again));
+        menu("🕌 " + title, l, a, this::showPerPrayerAdhan);
     }
 
     private void promptUrl() {
