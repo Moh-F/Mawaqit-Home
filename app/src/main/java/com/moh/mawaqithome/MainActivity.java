@@ -686,6 +686,7 @@ public class MainActivity extends Activity {
         shiftLayer.removeView(webView);
         webView.destroy();
         AppLog.info("APP", "destroyed");
+        if (quranPlayer != null) quranPlayer.stop();
         phoneSrv.stop();
         super.onDestroy();
     }
@@ -3957,6 +3958,9 @@ public class MainActivity extends Activity {
         a.add(this::promptUrl);
         l.add("🕌  الأذان وصوت المؤذن:  " + onOff(prefs.getBoolean("adhan_on", false)));
         a.add(this::showAdhanSettings);
+        l.add("📖  القرآن الكريم (جدولة القراءة آية بآية):  "
+                + onOff(prefs.getBoolean("quran_on", true) && QuranSched.items(prefs).length() > 0));
+        a.add(this::showQuranSettings);
         l.add("🌙  حماية الشاشة (الاختفاء والتعتيم والنوم)");
         a.add(this::showSaverSettings);
         l.add("☰  الشريط والتصنيفات والقائمة");
@@ -4414,6 +4418,478 @@ public class MainActivity extends Activity {
                 .setNegativeButton("إلغاء", null).show();
     }
 
+    // ------------------------------------------------------------------ Quran
+
+    private static final String[] SURAHS = {"الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف",
+            "الأنفال", "التوبة", "يونس", "هود", "يوسف", "الرعد", "إبراهيم", "الحجر", "النحل", "الإسراء", "الكهف", "مريم",
+            "طه", "الأنبياء", "الحج", "المؤمنون", "النور", "الفرقان", "الشعراء", "النمل", "القصص", "العنكبوت", "الروم",
+            "لقمان", "السجدة", "الأحزاب", "سبأ", "فاطر", "يس", "الصافات", "ص", "الزمر", "غافر", "فصلت", "الشورى",
+            "الزخرف", "الدخان", "الجاثية", "الأحقاف", "محمد", "الفتح", "الحجرات", "ق", "الذاريات", "الطور", "النجم",
+            "القمر", "الرحمن", "الواقعة", "الحديد", "المجادلة", "الحشر", "الممتحنة", "الصف", "الجمعة", "المنافقون",
+            "التغابن", "الطلاق", "التحريم", "الملك", "القلم", "الحاقة", "المعارج", "نوح", "الجن", "المزمل", "المدثر",
+            "القيامة", "الإنسان", "المرسلات", "النبأ", "النازعات", "عبس", "التكوير", "الانفطار", "المطففين", "الانشقاق",
+            "البروج", "الطارق", "الأعلى", "الغاشية", "الفجر", "البلد", "الشمس", "الليل", "الضحى", "الشرح", "التين",
+            "العلق", "القدر", "البينة", "الزلزلة", "العاديات", "القارعة", "التكاثر", "العصر", "الهمزة", "الفيل", "قريش",
+            "الماعون", "الكوثر", "الكافرون", "النصر", "المسد", "الإخلاص", "الفلق", "الناس"};
+    private static final String[] DAY_NAMES = {"الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"};
+
+    private QuranPlayer quranPlayer;
+    private FrameLayout quranView;
+    private TextView qTitle, qAyah, qInfo;
+    private boolean quranRunning, quranReturn;
+    private int quranRetry;
+    private String quranReciterShown = "";
+
+    private interface IntCb {
+        void on(int v);
+    }
+
+    private String quranDefaultReciter() {
+        return prefs.getString("quran_reciter", "Alafasy_128kbps");
+    }
+
+    private String quranBase(String key) {
+        if ("custom".equals(key)) return prefs.getString("quran_custom_base", "");
+        return "https://everyayah.com/data/" + key + "/";
+    }
+
+    private static String arDigits(int n) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : String.valueOf(n).toCharArray()) sb.append((char) ('٠' + (c - '0')));
+        return sb.toString();
+    }
+
+    private void startQuran(final JSONObject o, final boolean test) {
+        if (quranRunning) return;
+        if (!test && !prefs.getBoolean("quran_on", true)) return;
+        if (adhanRunning) {                                           // adhan first, then the reading
+            if (quranRetry++ < 40) handler.postDelayed(() -> startQuran(o, test), 20_000L);
+            return;
+        }
+        quranRetry = 0;
+        if (!test) {
+            String key = o.optLong("id") + "@" + System.currentTimeMillis() / (10 * 60_000L);
+            if (key.equals(prefs.getString("quran_last", ""))) return;
+            prefs.edit().putString("quran_last", key).apply();
+        }
+        final int surah = Math.max(1, Math.min(114, o.optInt("s", 1)));
+        String r = o.optString("r", "");
+        if (r.isEmpty()) r = quranDefaultReciter();
+        final String base = quranBase(r);
+        if (base.isEmpty()) {
+            toast("لم يُحدَّد رابط القارئ المخصص");
+            return;
+        }
+        quranReciterShown = QuranPlayer.reciterName(r);
+        quranRunning = true;
+        quranReturn = prefs.getBoolean("quran_return", true) && !resumed && !test;
+        AppLog.info("QURAN", "start surah " + surah + " " + o.optInt("a") + "-" + o.optInt("b") + " reciter " + r
+                + " returnToApp=" + quranReturn);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        lastInput = SystemClock.elapsedRealtime();
+        sleepTried = false;
+        pendingReturn = null;
+        try {
+            if (topDlg != null) topDlg.dismiss();
+        } catch (Exception ignored) {
+        }
+        if (railOpen) closeRail(false);
+        if (sizeH > 0) applyStage(0, false);
+        pauseNativeVideo();
+        buildQuranView("سورة " + SURAHS[surah - 1]);
+        float vol = prefs.getInt("quran_vol", 70) / 100f;
+        quranPlayer = new QuranPlayer(this, surah, o.optInt("a", 0), o.optInt("b", 0), base, vol, new QuranPlayer.Cb() {
+            @Override
+            public void onAyah(int ayah, String text, boolean bismillah, int index, int total) {
+                if (!quranRunning || qAyah == null) return;
+                String shown = bismillah ? text : text + "  ﴿" + arDigits(ayah) + "﴾";
+                qAyah.setText(shown);
+                int len = text.length();
+                qAyah.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(len < 60 ? 46 : len < 120 ? 38 : len < 220 ? 31
+                        : len < 380 ? 25 : len < 600 ? 20 : 16));
+                qInfo.setText((bismillah ? "البسملة" : "الآية " + arDigits(ayah)) + "   •   " + arDigits(index + 1)
+                        + " / " + arDigits(total) + "      OK: إيقاف مؤقت   •   رجوع: إنهاء");
+            }
+
+            @Override
+            public void onDone() {
+                AppLog.info("QURAN", "finished");
+                stopQuran(true);
+            }
+
+            @Override
+            public void onError(String msg) {
+                toast(msg);
+                stopQuran(true);
+            }
+        });
+        quranPlayer.start();
+    }
+
+    private void buildQuranView(String title) {
+        quranView = new FrameLayout(this);
+        quranView.setBackgroundColor(0xF2040A07);
+        quranView.setClickable(true);
+        quranView.setElevation(dp(30));
+        qTitle = new TextView(this);
+        qTitle.setTypeface(tf(true));
+        qTitle.setTextColor(0xFFF4C95D);
+        qTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(30));
+        qTitle.setGravity(Gravity.CENTER);
+        qTitle.setTextDirection(View.TEXT_DIRECTION_RTL);
+        qTitle.setText(title + "\n" + quranReciterShown);
+        qTitle.setPadding(dp(20), dp(14), dp(20), 0);
+        quranView.addView(qTitle, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        qAyah = new TextView(this);
+        qAyah.setTypeface(tf(true));
+        qAyah.setTextColor(Color.WHITE);
+        qAyah.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(38));
+        qAyah.setGravity(Gravity.CENTER);
+        qAyah.setTextDirection(View.TEXT_DIRECTION_RTL);
+        qAyah.setLineSpacing(0f, 1.45f);
+        qAyah.setText("جارٍ التجهيز…");
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(Math.round(sizeW * 0.88f),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        quranView.addView(qAyah, lp);
+        qInfo = new TextView(this);
+        qInfo.setTypeface(tf(false));
+        qInfo.setTextColor(0xAAFFFFFF);
+        qInfo.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(15));
+        qInfo.setGravity(Gravity.CENTER);
+        qInfo.setTextDirection(View.TEXT_DIRECTION_RTL);
+        qInfo.setPadding(dp(20), 0, dp(20), dp(16));
+        quranView.addView(qInfo, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        root.addView(quranView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void toggleQuranPause() {
+        if (quranPlayer == null) return;
+        if (quranPlayer.isPaused()) quranPlayer.resume();
+        else quranPlayer.pause();
+        if (qTitle != null) qTitle.setAlpha(quranPlayer.isPaused() ? 0.5f : 1f);
+        toast(quranPlayer.isPaused() ? "إيقاف مؤقت" : "متابعة");
+    }
+
+    private void stopQuran(boolean returnToApp) {
+        if (!quranRunning) return;
+        quranRunning = false;
+        if (quranPlayer != null) quranPlayer.stop();
+        quranPlayer = null;
+        if (quranView != null) {
+            root.removeView(quranView);
+            quranView = null;
+        }
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        AppLog.info("QURAN", "stopped; returning to previous app: " + (returnToApp && quranReturn));
+        resumeNativeVideo();
+        if (returnToApp && quranReturn) moveTaskToBack(true);
+    }
+
+    // ---- schedule editor
+
+    private String whenLabel(JSONObject o) {
+        String t = o.optString("t", "fix");
+        int h = o.optInt("h", 0);
+        if ("fix".equals(t)) return String.format(java.util.Locale.US, "%02d:%02d", h / 60, h % 60);
+        String pn = PRAYER_NAMES[Math.max(0, Math.min(4, o.optInt("p", 0)))];
+        if (h == 0) return "عند أذان " + pn;
+        return ("pre".equals(t) ? "قبل " : "بعد ") + pn + " بـ " + h + " د";
+    }
+
+    private String daysLabel(int mask) {
+        if (mask == 127 || mask == 0) return "كل يوم";
+        if (mask == 32) return "الجمعة";
+        if (mask == 62) return "الاثنين–الجمعة";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 7; i++) if ((mask & (1 << i)) != 0) sb.append(sb.length() > 0 ? "، " : "").append(DAY_NAMES[i]);
+        return sb.toString();
+    }
+
+    private String rangeLabel(JSONObject o) {
+        int a = o.optInt("a", 0), b = o.optInt("b", 0);
+        return a <= 1 && b <= 0 ? "كاملة" : "الآيات " + Math.max(1, a) + "–" + (b <= 0 ? "النهاية" : String.valueOf(b));
+    }
+
+    private String itemLabel(JSONObject o) {
+        String r = o.optString("r", "");
+        return (o.optBoolean("on", true) ? "●  " : "○  ") + "سورة " + SURAHS[Math.max(1, Math.min(114, o.optInt("s", 1))) - 1]
+                + " (" + rangeLabel(o) + ") • " + daysLabel(o.optInt("d", 127)) + " • " + whenLabel(o)
+                + (r.isEmpty() ? "" : " • " + QuranPlayer.reciterName(r));
+    }
+
+    private void saveQuranItems(JSONArray ar) {
+        prefs.edit().putString("quran_items", ar.toString()).apply();
+        QuranSched.schedule(this);
+    }
+
+    private void putQuranItem(JSONObject o) {
+        try {
+            JSONArray ar = QuranSched.items(prefs);
+            boolean done = false;
+            for (int i = 0; i < ar.length(); i++)
+                if (ar.optJSONObject(i).optLong("id") == o.optLong("id")) {
+                    ar.put(i, o);
+                    done = true;
+                }
+            if (!done) ar.put(o);
+            saveQuranItems(ar);
+        } catch (Exception e) {
+            AppLog.error("QURAN", "save item", e);
+        }
+    }
+
+    private void removeQuranItem(long id) {
+        try {
+            JSONArray ar = QuranSched.items(prefs), out = new JSONArray();
+            for (int i = 0; i < ar.length(); i++) if (ar.optJSONObject(i).optLong("id") != id) out.put(ar.get(i));
+            saveQuranItems(out);
+        } catch (Exception e) {
+            AppLog.error("QURAN", "remove item", e);
+        }
+    }
+
+    private JSONObject newQuranItem(int surah, int from, int to, String t, int h, int p, int days) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("id", System.currentTimeMillis()).put("s", surah).put("a", from).put("b", to).put("r", "")
+                    .put("t", t).put("h", h).put("p", p).put("d", days).put("on", true);
+        } catch (Exception ignored) {
+        }
+        return o;
+    }
+
+    private void showQuranSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showQuranSettings;
+        l.add("📖  جدولة القرآن:  " + onOff(prefs.getBoolean("quran_on", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("quran_on", !prefs.getBoolean("quran_on", true)).apply();
+            QuranSched.schedule(this);
+            showQuranSettings();
+        });
+        final JSONArray ar = QuranSched.items(prefs);
+        for (int i = 0; i < ar.length(); i++) {
+            final JSONObject o = ar.optJSONObject(i);
+            if (o == null) continue;
+            l.add(itemLabel(o));
+            a.add(() -> showQuranItem(o.optLong("id")));
+        }
+        l.add("➕  إضافة جدول (سورة ← نطاق ← وقت ← أيام)");
+        a.add(this::quranAdd);
+        l.add("⚡  قوالب جاهزة (الكهف الجمعة، البقرة ليلاً، الملك بعد العشاء…)");
+        a.add(this::quranTemplates);
+        l.add("🎙  القارئ الافتراضي:  " + QuranPlayer.reciterName(quranDefaultReciter()));
+        a.add(() -> pickQuranReciter(false, k -> {
+            prefs.edit().putString("quran_reciter", k).apply();
+            showQuranSettings();
+        }, back));
+        l.add("🔊  مستوى صوت القرآن:  " + prefs.getInt("quran_vol", 70) + "%");
+        a.add(() -> numberDialog("مستوى صوت القرآن", "quran_vol", 70, 5, 100, "%", null, null, back, back));
+        l.add("↩  العودة للتطبيق السابق بعد الانتهاء:  " + onOff(prefs.getBoolean("quran_return", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("quran_return", !prefs.getBoolean("quran_return", true)).apply();
+            showQuranSettings();
+        });
+        l.add("🔗  رابط قارئ مخصص (مجلد ملفات 001001.mp3 …):  "
+                + (prefs.getString("quran_custom_base", "").isEmpty() ? "غير محدد" : "محدد"));
+        a.add(() -> promptText("رابط المجلد الذي فيه ملفات الآيات (SSSAAA.mp3)", "https://…/folder/",
+                prefs.getString("quran_custom_base", ""), v -> {
+                    prefs.edit().putString("quran_custom_base", v).apply();
+                    showQuranSettings();
+                }));
+        long nx = prefs.getLong("next_quran", 0L);
+        JSONObject ni = QuranSched.find(prefs, prefs.getLong("next_quran_id", -1L));
+        l.add("ℹ  القراءة القادمة:  " + (!prefs.getBoolean("quran_on", true) || nx == 0L || ni == null ? "—"
+                : "سورة " + SURAHS[Math.max(1, Math.min(114, ni.optInt("s", 1))) - 1] + "  "
+                + new java.text.SimpleDateFormat("EEE HH:mm", java.util.Locale.getDefault()).format(new java.util.Date(nx))));
+        a.add(this::showQuranSettings);
+        menu("📖 القرآن الكريم", l, a, this::showLauncherSettings);
+    }
+
+    private void showQuranItem(final long id) {
+        final JSONObject o = QuranSched.find(prefs, id);
+        if (o == null) {
+            showQuranSettings();
+            return;
+        }
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = () -> showQuranItem(id);
+        l.add("▶  تشغيل الآن (تجربة)");
+        a.add(() -> {
+            toast("بدأت القراءة");
+            startQuran(o, true);
+        });
+        l.add("⏻  الحالة:  " + onOff(o.optBoolean("on", true)));
+        a.add(() -> {
+            try {
+                o.put("on", !o.optBoolean("on", true));
+            } catch (Exception ignored) {
+            }
+            putQuranItem(o);
+            showQuranItem(id);
+        });
+        l.add("⏰  الوقت:  " + whenLabel(o));
+        a.add(() -> pickQuranWhen((t, h, p) -> {
+            try {
+                o.put("t", t).put("h", h).put("p", p);
+            } catch (Exception ignored) {
+            }
+            putQuranItem(o);
+            showQuranItem(id);
+        }, back));
+        l.add("📅  الأيام:  " + daysLabel(o.optInt("d", 127)));
+        a.add(() -> pickQuranDays(m -> {
+            try {
+                o.put("d", m);
+            } catch (Exception ignored) {
+            }
+            putQuranItem(o);
+            showQuranItem(id);
+        }, back));
+        l.add("📖  السورة والنطاق:  " + SURAHS[Math.max(1, Math.min(114, o.optInt("s", 1))) - 1] + " (" + rangeLabel(o) + ")");
+        a.add(() -> pickQuranSurah(s -> pickQuranRange((x, y) -> {
+            try {
+                o.put("s", s).put("a", x).put("b", y);
+            } catch (Exception ignored) {
+            }
+            putQuranItem(o);
+            showQuranItem(id);
+        }, back), back));
+        l.add("🎙  القارئ:  " + (o.optString("r", "").isEmpty() ? "الافتراضي (" + QuranPlayer.reciterName(quranDefaultReciter()) + ")"
+                : QuranPlayer.reciterName(o.optString("r"))));
+        a.add(() -> pickQuranReciter(true, k -> {
+            try {
+                o.put("r", k);
+            } catch (Exception ignored) {
+            }
+            putQuranItem(o);
+            showQuranItem(id);
+        }, back));
+        l.add("🗑  حذف هذا الجدول");
+        a.add(() -> {
+            removeQuranItem(id);
+            showQuranSettings();
+        });
+        menu("📖 " + itemLabel(o), l, a, this::showQuranSettings);
+    }
+
+    private void quranAdd() {
+        final Runnable back = this::showQuranSettings;
+        pickQuranSurah(s -> pickQuranRange((x, y) -> pickQuranWhen((t, h, p) -> pickQuranDays(m -> {
+            putQuranItem(newQuranItem(s, x, y, t, h, p, m));
+            toast("أُضيف الجدول");
+            showQuranSettings();
+        }, back), back), back), back);
+    }
+
+    private void quranTemplates() {
+        final Runnable back = this::showQuranSettings;
+        final String[] names = {"سورة الكهف — يوم الجمعة بعد الفجر بساعة", "سورة البقرة — يومياً الساعة 01:00",
+                "سورة الملك — يومياً بعد العشاء بـ 15 دقيقة", "سورة يس — يومياً بعد الفجر بـ 20 دقيقة",
+                "سورة السجدة — يومياً قبل المغرب بـ 30 دقيقة"};
+        choice("قوالب جاهزة (يمكن تعديل وقتها وقارئها بعد الإضافة)", names, -1, i -> {
+            JSONObject o;
+            if (i == 0) o = newQuranItem(18, 0, 0, "post", 60, 0, 32);
+            else if (i == 1) o = newQuranItem(2, 0, 0, "fix", 60, 0, 127);
+            else if (i == 2) o = newQuranItem(67, 0, 0, "post", 15, 4, 127);
+            else if (i == 3) o = newQuranItem(36, 0, 0, "post", 20, 0, 127);
+            else o = newQuranItem(32, 0, 0, "pre", 30, 3, 127);
+            putQuranItem(o);
+            toast("أُضيف — عدّل الوقت أو القارئ بالضغط عليه");
+            showQuranSettings();
+        }, back);
+    }
+
+    private void pickQuranSurah(final IntCb cb, final Runnable back) {
+        final String[] names = new String[114];
+        for (int i = 0; i < 114; i++) names[i] = (i + 1) + ".  سورة " + SURAHS[i];
+        choice("اختر السورة", names, -1, i -> cb.on(i + 1), back);
+    }
+
+    private interface RangeCb {
+        void on(int from, int to);
+    }
+
+    private void pickQuranRange(final RangeCb cb, final Runnable back) {
+        choice("نطاق القراءة", new String[]{"السورة كاملة", "من آية إلى آية…"}, -1, i -> {
+            if (i == 0) {
+                cb.on(0, 0);
+                return;
+            }
+            numberDialog("من الآية رقم", "q_from", 1, 1, 286, "", null, null, () ->
+                    numberDialog("إلى الآية رقم", "q_to", 10, 1, 286, "", null, null, () -> {
+                        int x = prefs.getInt("q_from", 1), y = prefs.getInt("q_to", 10);
+                        cb.on(Math.min(x, y), Math.max(x, y));
+                    }, back), back);
+        }, back);
+    }
+
+    private interface WhenCb {
+        void on(String type, int h, int prayer);
+    }
+
+    private void pickQuranWhen(final WhenCb cb, final Runnable back) {
+        choice("متى تبدأ القراءة؟", new String[]{"في ساعة محددة من اليوم", "بعد صلاة (بعدد دقائق)", "قبل صلاة (بعدد دقائق)"},
+                -1, i -> {
+                    if (i == 0) {
+                        numberDialog("الساعة (0 – 23)", "q_h", 1, 0, 23, "", null, null, () ->
+                                numberDialog("الدقيقة (0 – 59)", "q_m", 0, 0, 59, "", null, null, () ->
+                                        cb.on("fix", prefs.getInt("q_h", 1) * 60 + prefs.getInt("q_m", 0), 0), back),
+                                back);
+                        return;
+                    }
+                    final String t = i == 1 ? "post" : "pre";
+                    choice("أي صلاة؟", PRAYER_NAMES, -1, pi ->
+                            numberDialog(t.equals("post") ? "بعد الأذان بكم دقيقة؟" : "قبل الأذان بكم دقيقة؟", "q_off", 15, 0,
+                                    240, " د", "مباشرة", null, () -> cb.on(t, prefs.getInt("q_off", 15), pi), back),
+                            back);
+                }, back);
+    }
+
+    private void pickQuranDays(final IntCb cb, final Runnable back) {
+        choice("في أي أيام؟", new String[]{"كل يوم", "الجمعة فقط", "من الاثنين إلى الجمعة", "أيام محددة…"}, -1, i -> {
+            if (i == 0) cb.on(127);
+            else if (i == 1) cb.on(32);
+            else if (i == 2) cb.on(62);
+            else {
+                final boolean[] on = new boolean[7];
+                dialog("اختر الأيام").setMultiChoiceItems(DAY_NAMES, on, null)
+                        .setPositiveButton("حفظ", (d, w) -> {
+                            int m = 0;
+                            for (int k = 0; k < 7; k++) if (on[k]) m |= 1 << k;
+                            cb.on(m == 0 ? 127 : m);
+                        }).setNegativeButton("إلغاء", (d, w) -> back.run()).show();
+            }
+        }, back);
+    }
+
+    private void pickQuranReciter(boolean withDefault, final StrCb cb, final Runnable back) {
+        final List<String> keys = new ArrayList<>();
+        final List<String> names = new ArrayList<>();
+        if (withDefault) {
+            keys.add("");
+            names.add("الافتراضي (" + QuranPlayer.reciterName(quranDefaultReciter()) + ")");
+        }
+        for (String[] r : QuranPlayer.RECITERS) {
+            keys.add(r[0]);
+            names.add(r[1]);
+        }
+        keys.add("custom");
+        names.add("قارئ مخصص (الرابط المحدد في الإعدادات)");
+        choice("اختر القارئ", names.toArray(new String[0]), -1, i -> cb.on(keys.get(i)), back);
+    }
+
+    private interface StrCb {
+        void on(String v);
+    }
+
     // ------------------------------------------------------------------ Adhan
 
     private android.media.MediaPlayer adhanMp, duaMp;
@@ -4424,6 +4900,16 @@ public class MainActivity extends Activity {
 
     private void handleAdhanIntent(Intent in) {
         if (in == null) return;
+        long qid = in.getLongExtra("quran", -1L);
+        if (qid >= 0) {
+            long qat = in.getLongExtra("quran_at", 0L);
+            in.removeExtra("quran");
+            if (System.currentTimeMillis() - qat <= 5 * 60_000L) {
+                JSONObject qo = QuranSched.find(prefs, qid);
+                if (qo != null) startQuran(qo, false);
+            }
+            return;
+        }
         int idx = in.getIntExtra("adhan", -1);
         if (idx < 0) return;
         long at = in.getLongExtra("adhan_at", 0L);
@@ -4434,6 +4920,7 @@ public class MainActivity extends Activity {
 
     private void startAdhan(int idx, boolean test) {
         if (adhanRunning) return;
+        if (quranRunning) stopQuran(false);                         // the adhan always comes first
         if (!test) {
             if (!prefs.getBoolean("adhan_on", false)) return;
             String key = new java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(new java.util.Date())
@@ -4460,7 +4947,8 @@ public class MainActivity extends Activity {
         if (railOpen) closeRail(false);
         if (sizeH > 0) applyStage(0, false);
         pauseNativeVideo();
-        String u = prefs.getString("adhan_url", "");
+        final String fajrUrl = prefs.getString("adhan_fajr_url", "");
+        final String u = idx == 0 && !fajrUrl.isEmpty() ? fajrUrl : prefs.getString("adhan_url", "");
         if (u.isEmpty()) {
             toast("لم تُحدَّد نغمة أذان — الإعدادات ← الأذان");
             afterAdhan();
@@ -4510,39 +4998,107 @@ public class MainActivity extends Activity {
         if (!adhanRunning) return;
         releaseAdhanMp();
         if (duaView != null || duaMp != null) return;                    // already in the du'a phase
-        long minMs = Math.max(1, prefs.getInt("adhan_dua_secs", 20)) * 1000L;
-        boolean text = prefs.getBoolean("adhan_dua_show", true);
-        String au = prefs.getString("adhan_dua_url", "");
-        if (text) showDuaText();
-        if (!au.isEmpty()) {
-            try {
-                duaMp = new android.media.MediaPlayer();
-                duaMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
-                duaMp.setDataSource(au);
-                float v = prefs.getInt("adhan_vol", 80) / 100f;
-                duaMp.setVolume(v, v);
-                duaMp.setOnPreparedListener(m -> m.start());
-                duaMp.setOnCompletionListener(m -> {
-                    duaAudioDone = true;
-                    duaCheck();
-                });
-                duaMp.setOnErrorListener((m, w, e) -> {
-                    duaAudioDone = true;
-                    duaCheck();
-                    return true;
-                });
-                duaMp.prepareAsync();
-            } catch (Exception e) {
-                duaAudioDone = true;
-            }
-        } else {
+        final long minMs = Math.max(1, prefs.getInt("adhan_dua_secs", 20)) * 1000L;
+        final boolean text = prefs.getBoolean("adhan_dua_show", true);
+        final String au = prefs.getString("adhan_dua_url", "");
+        if (au.isEmpty()) {                                              // text only: timed by the setting
+            if (text) showDuaText();
             duaAudioDone = true;
+            handler.postDelayed(() -> {
+                duaTimeUp = true;
+                duaCheck();
+            }, text ? minMs : 0L);
+            return;
         }
-        if (!text && au.isEmpty()) minMs = 0L;
-        handler.postDelayed(() -> {
-            duaTimeUp = true;
-            duaCheck();
-        }, minMs);
+        // With a du'a recording the text appears exactly when the recording starts, is highlighted word by
+        // word along the recording, and disappears when it ends - so text and voice always agree.
+        duaTimeUp = true;
+        final Runnable fallback = () -> {
+            if (!adhanRunning) return;
+            if (text && duaView == null) showDuaText();
+            duaAudioDone = true;
+            duaTimeUp = false;
+            handler.postDelayed(() -> {
+                duaTimeUp = true;
+                duaCheck();
+            }, text ? minMs : 0L);
+        };
+        try {
+            duaMp = new android.media.MediaPlayer();
+            duaMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+            duaMp.setDataSource(au);
+            float v = prefs.getInt("adhan_vol", 80) / 100f;
+            duaMp.setVolume(v, v);
+            duaMp.setOnPreparedListener(m -> {
+                if (!adhanRunning) return;
+                if (text) showDuaText();
+                m.start();
+                if (text) startDuaSync();
+            });
+            duaMp.setOnCompletionListener(m -> {
+                handler.removeCallbacks(duaTickR);
+                duaAudioDone = true;
+                duaCheck();
+            });
+            duaMp.setOnErrorListener((m, w, e) -> {
+                AppLog.info("ADHAN", "dua audio error " + w + "/" + e);
+                handler.removeCallbacks(duaTickR);
+                fallback.run();
+                return true;
+            });
+            duaMp.prepareAsync();
+        } catch (Exception e) {
+            AppLog.error("ADHAN", "dua play failed", e);
+            fallback.run();
+        }
+    }
+
+    private final Runnable duaTickR = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                if (duaMp == null || duaView == null || !adhanRunning) return;
+                int d = duaMp.getDuration(), pos = duaMp.getCurrentPosition();
+                if (d > 0) {
+                    float lead = prefs.getInt("adhan_dua_lead", 4) / 100f;
+                    float f = Math.max(0f, Math.min(1f, (pos / (float) d - lead) / (1f - lead - 0.03f)));
+                    paintDua(f);
+                }
+            } catch (Exception ignored) {
+            }
+            handler.postDelayed(this, 120L);
+        }
+    };
+
+    /** Colours the du'a words that have been recited so far (weighted by word length). */
+    private void paintDua(float f) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\S+").matcher(DUA_TEXT);
+        List<int[]> w = new ArrayList<>();
+        float total = 0f;
+        while (m.find()) {
+            w.add(new int[]{m.start(), m.end()});
+            total += m.end() - m.start() + 1;
+        }
+        SpannableString sp = new SpannableString(DUA_TEXT);
+        float acc = 0f, target = f * total;
+        boolean curSet = false;
+        for (int[] x : w) {
+            acc += x[1] - x[0] + 1;
+            int col;
+            if (acc <= target) col = 0xFFFFFFFF;                     // already recited
+            else if (!curSet && f > 0f) {
+                col = 0xFFF4C95D;                                    // being recited
+                curSet = true;
+            } else col = 0x77FFFFFF;                                 // still to come
+            sp.setSpan(new ForegroundColorSpan(col), x[0], x[1], Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        duaView.setText(sp);
+    }
+
+    private void startDuaSync() {
+        handler.removeCallbacks(duaTickR);
+        paintDua(0f);
+        handler.postDelayed(duaTickR, 120L);
     }
 
     private void duaCheck() {
@@ -4575,6 +5131,7 @@ public class MainActivity extends Activity {
 
     private void endAdhan() {
         handler.removeCallbacks(adhanGuard);
+        handler.removeCallbacks(duaTickR);
         releaseAdhanMp();
         try {
             if (duaMp != null) duaMp.release();
@@ -4794,6 +5351,8 @@ public class MainActivity extends Activity {
         });
         l.add("🎙  صوت المؤذن:  " + adhanName());
         a.add(this::showAdhanSound);
+        l.add("🌅  أذان الفجر:  " + fajrName());
+        a.add(this::showFajrSound);
         l.add("🔊  مستوى صوت الأذان:  " + prefs.getInt("adhan_vol", 80) + "%  (ويُضبط صوت التلفاز أيضاً)");
         a.add(() -> numberDialog("مستوى صوت الأذان", "adhan_vol", 80, 5, 100, "%", null, null, back, back));
         l.add("🤲  دعاء بعد الأذان (نصاً على الشاشة):  " + onOff(prefs.getBoolean("adhan_dua_show", true)));
@@ -4801,7 +5360,7 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("adhan_dua_show", !prefs.getBoolean("adhan_dua_show", true)).apply();
             showAdhanSettings();
         });
-        l.add("⏱  مدة عرض الدعاء:  " + prefs.getInt("adhan_dua_secs", 20) + " ث");
+        l.add("⏱  مدة عرض الدعاء (عند عدم وجود صوت للدعاء):  " + prefs.getInt("adhan_dua_secs", 20) + " ث");
         a.add(() -> numberDialog("مدة عرض الدعاء بالثواني", "adhan_dua_secs", 20, 3, 120, " ث", null, null, back, back));
         l.add("🔉  صوت الدعاء (ملف أو رابط، اختياري):  " + (prefs.getString("adhan_dua_url", "").isEmpty() ? "بلا صوت" : "محدد"));
         a.add(() -> pickAudioSource("صوت الدعاء بعد الأذان", v -> {
@@ -4815,6 +5374,8 @@ public class MainActivity extends Activity {
                 showAdhanSettings();
             });
         }
+        l.add("🎚  تأخير بدء تلوين النص عن الصوت:  " + prefs.getInt("adhan_dua_lead", 4) + "%  (يُضبط إن سبق النص الصوت أو تأخر)");
+        a.add(() -> numberDialog("تأخير بدء تلوين نص الدعاء (٪ من مدة التسجيل)", "adhan_dua_lead", 4, 0, 40, "%", null, null, back, back));
         l.add("⏳  الانتظار بعد الدعاء قبل العودة:  " + prefs.getInt("adhan_wait", 3) + " ث");
         a.add(() -> numberDialog("الانتظار بعد الدعاء (ثوانٍ)", "adhan_wait", 3, 0, 60, " ث", null, null, back, back));
         l.add("↩  العودة للتطبيق/الفيديو السابق بعد الانتهاء:  " + onOff(prefs.getBoolean("adhan_return", true)));
@@ -4826,6 +5387,11 @@ public class MainActivity extends Activity {
         a.add(() -> {
             toast("بدأت التجربة");
             startAdhan(-1, true);
+        });
+        l.add("▶  تجربة أذان الفجر الآن");
+        a.add(() -> {
+            toast("بدأت التجربة");
+            startAdhan(0, true);
         });
         long nx = prefs.getLong("next_adhan", 0L);
         int ni = prefs.getInt("next_adhan_idx", -1);
@@ -4861,13 +5427,30 @@ public class MainActivity extends Activity {
     }
 
     private void addAdhan(String name, String url) {
+        addAdhan(name, url, true);
+    }
+
+    /** Arabic label of a library sound from its local path, or the file name. */
+    private String soundLabel(String path) {
+        String fn = path.substring(path.lastIndexOf('/') + 1);
+        for (String[] c : ADHAN_CATALOG) if (c[0].replaceAll("[^A-Za-z0-9._-]", "_").equals(fn)) return c[1];
+        for (String[] c : DUA_CATALOG) if (c[0].replaceAll("[^A-Za-z0-9._-]", "_").equals(fn)) return c[1];
+        return fn.isEmpty() ? "أذان مخصص" : fn;
+    }
+
+    private void addAdhan(String name, String url, boolean select) {
         try {
             org.json.JSONArray ar = adhanList();
-            org.json.JSONObject o = new org.json.JSONObject();
-            o.put("n", name.length() > 60 ? name.substring(0, 60) : name);
-            o.put("u", url);
-            ar.put(o);
-            prefs.edit().putString("adhan_list", ar.toString()).putString("adhan_url", url).apply();
+            boolean have = false;
+            for (int i = 0; i < ar.length(); i++)
+                if (url.equals(ar.optJSONObject(i).optString("u"))) have = true;
+            if (!have) {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("n", name.length() > 60 ? name.substring(0, 60) : name);
+                o.put("u", url);
+                ar.put(o);
+            }
+            prefs.edit().putString("adhan_list", ar.toString()).putString(select ? "adhan_url" : "adhan_fajr_url", url).apply();
         } catch (Exception e) {
             AppLog.error("ADHAN", "save list", e);
         }
@@ -4894,8 +5477,7 @@ public class MainActivity extends Activity {
         a.add(() -> promptText("كلمة البحث عن ملف صوتي", "adhan makkah", "adhan", this::adhanSearch));
         l.add("➕  إضافة أذان من ملف أو رابط (جوال / شاشة / رابط)");
         a.add(() -> pickAudioSource("إضافة صوت أذان", v -> {
-            String nm = v.substring(v.lastIndexOf('/') + 1);
-            addAdhan(nm.isEmpty() ? "أذان مخصص" : nm, v);
+            addAdhan(soundLabel(v), v);
             showAdhanSound();
         }, this::showAdhanSound));
         if (!cur.isEmpty()) {
@@ -4912,6 +5494,43 @@ public class MainActivity extends Activity {
             });
         }
         menu("🎙 صوت المؤذن", l, a, this::showAdhanSettings);
+    }
+
+    private String fajrName() {
+        String u = prefs.getString("adhan_fajr_url", "");
+        if (u.isEmpty()) return "نفس أذان بقية الصلوات";
+        org.json.JSONArray ar = adhanList();
+        for (int i = 0; i < ar.length(); i++)
+            if (u.equals(ar.optJSONObject(i).optString("u"))) return ar.optJSONObject(i).optString("n");
+        return "مخصص";
+    }
+
+    private void showFajrSound() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final org.json.JSONArray ar = adhanList();
+        final String cur = prefs.getString("adhan_fajr_url", "");
+        l.add((cur.isEmpty() ? "✔  " : "○  ") + "نفس أذان بقية الصلوات");
+        a.add(() -> {
+            prefs.edit().remove("adhan_fajr_url").apply();
+            showFajrSound();
+        });
+        for (int i = 0; i < ar.length(); i++) {
+            final org.json.JSONObject o = ar.optJSONObject(i);
+            if (o == null) continue;
+            l.add((o.optString("u").equals(cur) ? "✔  " : "○  ") + o.optString("n"));
+            a.add(() -> {
+                prefs.edit().putString("adhan_fajr_url", o.optString("u")).apply();
+                toast("أذان الفجر: " + o.optString("n"));
+                showFajrSound();
+            });
+        }
+        l.add("➕  إضافة أذان فجر من المكتبة أو ملف أو رابط");
+        a.add(() -> pickAudioSource("إضافة أذان للفجر", v -> {
+            addAdhan(soundLabel(v), v, false);
+            showFajrSound();
+        }, this::showFajrSound));
+        menu("🌅 أذان الفجر", l, a, this::showAdhanSettings);
     }
 
     private void adhanSearch(final String q) {
@@ -6984,6 +7603,16 @@ public class MainActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent e) {
         lastInput = SystemClock.elapsedRealtime();
         int k = e.getKeyCode();
+        if (quranRunning) {
+            if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                if (stage > 0) applyStage(0, true);            // first key only wakes the screen
+                else if (k == KeyEvent.KEYCODE_BACK) stopQuran(true);
+                else if (k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER
+                        || k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || k == KeyEvent.KEYCODE_MEDIA_PLAY
+                        || k == KeyEvent.KEYCODE_MEDIA_PAUSE) toggleQuranPause();
+            }
+            return true;
+        }
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             if (stage > 0) {                       // first key only wakes the screen
                 applyStage(0, true);

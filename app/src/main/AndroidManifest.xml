@@ -46,6 +46,11 @@
             android:name=".AdhanReceiver"
             android:exported="false" />
 
+        <!-- Scheduled Quran reading -->
+        <receiver
+            android:name=".QuranReceiver"
+            android:exported="false" />
+
         <!-- Optional: start the launcher after boot -->
         <receiver
             android:name=".BootReceiver"

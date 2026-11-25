@@ -68,6 +68,7 @@ public final class WakeScheduler {
      */
     public static long scheduleNext(Context ctx) {
         scheduleAdhan(ctx);
+        QuranSched.schedule(ctx);
         SharedPreferences p = prefs(ctx);
         int[] t = load(p);
         if (t == null) return 0L;
