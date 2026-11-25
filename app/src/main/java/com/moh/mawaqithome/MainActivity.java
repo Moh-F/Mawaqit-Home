@@ -4546,11 +4546,13 @@ public class MainActivity extends Activity {
         final int surah = Math.max(1, Math.min(114, o.optInt("s", 1)));
         String r = o.optString("r", "");
         if (r.isEmpty()) r = quranDefaultReciter();
-        final String base = quranBase(r);
-        if (base.isEmpty()) {
+        final List<String> bases = new ArrayList<>();
+        if (quranBase(r).isEmpty()) {
             toast("لم يُحدَّد رابط القارئ المخصص");
             return;
         }
+        bases.add(quranBase(r));
+        for (String alt : QuranPlayer.altFolders(r)) bases.add("https://everyayah.com/data/" + alt + "/");
         quranReciterShown = QuranPlayer.reciterName(r);
         quranRunning = true;
         quranReturn = prefs.getBoolean("quran_return", true) && !resumed && !test;
@@ -4571,7 +4573,7 @@ public class MainActivity extends Activity {
         pauseNativeVideo();
         buildQuranView("سورة " + SURAHS[surah - 1]);
         float vol = prefs.getInt("quran_vol", 70) / 100f;
-        quranPlayer = new QuranPlayer(this, surah, o.optInt("a", 0), o.optInt("b", 0), base, vol, new QuranPlayer.Cb() {
+        quranPlayer = new QuranPlayer(this, surah, o.optInt("a", 0), o.optInt("b", 0), bases, vol, new QuranPlayer.Cb() {
             @Override
             public void onAyah(int ayah, String text, boolean bismillah, int index, int total) {
                 if (!quranRunning || qAyah == null) return;

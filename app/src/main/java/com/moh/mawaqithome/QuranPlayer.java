@@ -61,13 +61,26 @@ final class QuranPlayer {
 
     private static final class Item {
         int ayah;
-        String text, url;
+        String text, file;
         boolean bism;
+    }
+
+    /** Other folder names the same reciter is known under on everyayah.com (tried when the first one fails). */
+    static String[] altFolders(String key) {
+        if ("Ahmed_ibn_Ali_al-Ajamy_128kbps_ketaab".equals(key))
+            return new String[]{"Ahmed_ibn_Ali_al-Ajamy_128kbps_ketaab.net",
+                    "Ahmed_ibn_Ali_al-Ajamy_64kbps_QuranExplorer.Com"};
+        return new String[0];
+    }
+
+    private String url(int i) {
+        return bases.get(Math.min(baseIdx, bases.size() - 1)) + items.get(i).file;
     }
 
     private final Context ctx;
     private final int surah, from, to;
-    private final String base;
+    private final List<String> bases = new ArrayList<>();
+    private int baseIdx;
     private final float vol;
     private final Cb cb;
     private final Handler h = new Handler(Looper.getMainLooper());
@@ -77,12 +90,12 @@ final class QuranPlayer {
     private boolean curReady, nxtReady, stopped, paused, started, curPlaying;
     private int retries;
 
-    QuranPlayer(Context ctx, int surah, int from, int to, String base, float vol, Cb cb) {
+    QuranPlayer(Context ctx, int surah, int from, int to, List<String> bases, float vol, Cb cb) {
         this.ctx = ctx.getApplicationContext();
         this.surah = surah;
         this.from = from;
         this.to = to;
-        this.base = base.endsWith("/") ? base : base + "/";
+        for (String b : bases) this.bases.add(b.endsWith("/") ? b : b + "/");
         this.vol = vol;
         this.cb = cb;
     }
@@ -147,7 +160,7 @@ final class QuranPlayer {
             b.ayah = 0;
             b.bism = true;
             b.text = BISMILLAH;
-            b.url = base + "001001.mp3";
+            b.file = "001001.mp3";
             items.add(b);
         }
         for (int i = a; i <= z; i++) {
@@ -165,7 +178,7 @@ final class QuranPlayer {
             Item it = new Item();
             it.ayah = i;
             it.text = t;
-            it.url = base + String.format(Locale.US, "%03d%03d.mp3", surah, i);
+            it.file = String.format(Locale.US, "%03d%03d.mp3", surah, i);
             items.add(it);
         }
     }
@@ -199,10 +212,11 @@ final class QuranPlayer {
 
     private MediaPlayer create(final int idx) {
         final Item it = items.get(idx);
+        final String itUrl = url(idx);
         MediaPlayer m = new MediaPlayer();
         try {
             m.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            m.setDataSource(it.url);
+            m.setDataSource(itUrl);
             m.setVolume(vol, vol);
             m.setOnPreparedListener(mp -> {
                 if (stopped) return;
@@ -218,14 +232,14 @@ final class QuranPlayer {
                 advance();
             });
             m.setOnErrorListener((mp, what, extra) -> {
-                AppLog.info("QURAN", "audio error " + what + "/" + extra + " " + it.url);
+                AppLog.info("QURAN", "audio error " + what + "/" + extra + " " + itUrl);
                 if (stopped) return true;
                 onFail(mp, idx);
                 return true;
             });
             m.prepareAsync();
         } catch (Exception e) {
-            AppLog.error("QURAN", "create failed " + it.url, e);
+            AppLog.error("QURAN", "create failed " + itUrl, e);
             onFail(m, idx);
         }
         return m;
@@ -237,7 +251,18 @@ final class QuranPlayer {
         } catch (Exception ignored) {
         }
         if (retries >= 3) {
-            if (!stopped) cb.onError("تعذّر تحميل صوت الآية — تحقق من الإنترنت أو القارئ");
+            if (!started && baseIdx + 1 < bases.size()) {           // first ayah never played: try the next folder name
+                baseIdx++;
+                retries = 0;
+                AppLog.info("QURAN", "switching to folder " + bases.get(baseIdx));
+                h.postDelayed(() -> {
+                    if (stopped) return;
+                    curReady = false;
+                    cur = create(curIdx);
+                }, 500L);
+                return;
+            }
+            if (!stopped) cb.onError("تعذّر تحميل صوت الآية — تحقق من الإنترنت أو من القارئ (" + url(idx) + ")");
             return;
         }
         retries++;
