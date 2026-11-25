@@ -503,6 +503,43 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ Lifecycle
 
+    /** True on Fire TV / Android TV / Google TV class devices. */
+    private static boolean isTvDevice(Context c) {
+        try {
+            int t = c.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_TYPE_MASK;
+            PackageManager pm = c.getPackageManager();
+            return t == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+                    || pm.hasSystemFeature("android.software.leanback")
+                    || pm.hasSystemFeature("amazon.hardware.fire_tv");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Every TV gets the same layout: the interface is laid out as if the screen were 960 dp wide (exactly what a
+     * 1080p Fire Stick shows), whatever the density the device reports (Google TV usually reports 1.33 / 1.5).
+     * Phones and tablets keep their own density. Switchable in Settings > Sound, motion and look.
+     */
+    @Override
+    protected void attachBaseContext(Context base) {
+        try {
+            if (isTvDevice(base) && base.getSharedPreferences("cfg", MODE_PRIVATE).getBoolean("norm_ui", true)) {
+                android.util.DisplayMetrics dm = base.getResources().getDisplayMetrics();
+                int w = Math.max(dm.widthPixels, dm.heightPixels);
+                if (w >= 1000) {
+                    android.content.res.Configuration cfg = new android.content.res.Configuration(
+                            base.getResources().getConfiguration());
+                    cfg.densityDpi = Math.round(160f * w / 960f);
+                    super.attachBaseContext(base.createConfigurationContext(cfg));
+                    return;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        super.attachBaseContext(base);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -6100,6 +6137,19 @@ public class MainActivity extends Activity {
             getWindow().getDecorView().setSoundEffectsEnabled(prefs.getBoolean("sounds", true));
             showMotionSettings();
         });
+        l.add("📺  توحيد حجم الواجهة على كل التلفزيونات (Fire / Google / Android TV):  "
+                + onOff(prefs.getBoolean("norm_ui", true)) + "  (يعيد تشغيل الواجهة)");
+        a.add(() -> {
+            prefs.edit().putBoolean("norm_ui", !prefs.getBoolean("norm_ui", true)).apply();
+            recreate();
+        });
+        l.add("📐  عرض صفحة المواقيت المنطقي:  " + (prefs.getInt("page_vw", 960) == 0 ? "تلقائي (حسب الجهاز)"
+                : prefs.getInt("page_vw", 960)) + "  (960 = نفس مظهر Fire Stick)");
+        a.add(() -> numberDialog("عرض صفحة المواقيت المنطقي (أقل = عناصر أكبر)", "page_vw", 960, 0, 1920, "", "تلقائي",
+                null, () -> {
+                    applyPageCss();
+                    showMotionSettings();
+                }, this::showMotionSettings));
         l.add("🎬  مدة الحركات:  " + prefs.getInt("anim_pct", 100) + "%  (أقل = أسرع)");
         a.add(() -> numberDialog("مدة الحركات (100% = عادية)", "anim_pct", 100, 30, 250, "%", null, null,
                 this::showMotionSettings, this::showMotionSettings));
@@ -6355,6 +6405,11 @@ public class MainActivity extends Activity {
                 + ";window.__mhimg=" + JSONObject.quote(imgOn ? "/__mhbg/bg_" + prefs.getInt("bg_slot", 0)
                         + ".jpg?v=" + prefs.getLong("bg_last", 0) : "")
                 + ";window.__mhfade=" + Math.max(0, Math.min(10, prefs.getInt("bg_fade", 2)))
+                + ";window.__mhvw=" + (sizeW > sizeH ? Math.max(0, Math.min(1920, prefs.getInt("page_vw", 960))) : 0)
+                + ";function vp(){var w=window.__mhvw;if(!w)return;var m=document.querySelector('meta[name=viewport]');"
+                + "if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');"
+                + "(document.head||document.documentElement).appendChild(m);}"
+                + "var c='width='+w;if(m.getAttribute('content')!==c)m.setAttribute('content',c);}"
                 + ";function dim(){var any=window.__mhvid||window.__mhimg||window.__mhnat,d=document.getElementById('mh-dim');"
                 + "if(!any){if(d)d.remove();return;}"
                 + "if(!d){d=document.createElement('div');d.id='mh-dim';d.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:-1;pointer-events:none';document.body.appendChild(d);}"
@@ -6421,7 +6476,7 @@ public class MainActivity extends Activity {
                 + "ct.setAttribute('data-mh','1');}"
                 + "function ap(){var s=document.getElementById('mh-style');"
                 + "if(!s){s=document.createElement('style');s.id='mh-style';(document.head||document.body).appendChild(s);}"
-                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;fix();vid();img();dim();}"
+                + "if(s.textContent!==window.__mhcss)s.textContent=window.__mhcss;vp();fix();vid();img();dim();}"
                 + "ap();if(!window.__mhiv)window.__mhiv=setInterval(ap,3000);"
                 + "if(!window.__mhiv2)window.__mhiv2=setInterval(fix,500);"
                 + "if(!window.__mhmo&&window.MutationObserver){window.__mhmo=new MutationObserver(function(){"
