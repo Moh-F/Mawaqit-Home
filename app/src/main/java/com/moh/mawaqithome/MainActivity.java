@@ -4677,55 +4677,41 @@ public class MainActivity extends Activity {
         }, "audiocopy").start();
     }
 
-    /** Menu: where does this sound come from? */
-    /** Lists audio files stored in the repo folder audio/<dir>/ (GitHub API) and downloads the chosen one. */
+    /** Built-in sound catalogue: {file in repo folder, Arabic label}. Downloaded to the device on first use. */
+    private static final String[][] ADHAN_CATALOG = {
+            {"Makkah.mp3", "أذان مكة المكرمة"},
+            {"Makkah_Ali_Mala_1.mp3", "أذان الحرم المكي — علي بن أحمد ملا (1)"},
+            {"Makkah_Ali_Mala_2.mp3", "أذان الحرم المكي — علي بن أحمد ملا (2)"},
+            {"Madinah_1.mp3", "أذان الحرم المدني (1)"},
+            {"Madinah_2.mp3", "أذان الحرم المدني (2)"},
+            {"Afasy_HQ_1.mp3", "مشاري العفاسي — جودة عالية (1)"},
+            {"Afasy_HQ_2.mp3", "مشاري العفاسي — جودة عالية (2)"},
+            {"Afasy_Kuwait_1.mp3", "مشاري العفاسي — الكويت (1)"},
+            {"Afasy_Kuwait_2.mp3", "مشاري العفاسي — الكويت (2)"},
+            {"Islam_Sobhi.mp3", "إسلام صبحي"},
+            {"Afasy_Fajr_1.mp3", "أذان الفجر — مشاري العفاسي (1)"},
+            {"Afasy_Fajr_2.mp3", "أذان الفجر — مشاري العفاسي (2)"},
+            {"Trablsy_Fajr_Kuwait.mp3", "أذان الفجر — أحمد الطرابلسي (الكويت)"},
+            {"Mejlad_Fajr.mp3", "أذان الفجر — أحمد نواف المجلد"},
+            {"Umm_Al_Quwain_Fajr.mp3", "أذان الفجر — أم القيوين"},
+            {"Aassaf_Fajr_Iraq.mp3", "أذان الفجر — ياسين الأسف (العراق)"},
+    };
+    private static final String[][] DUA_CATALOG = {
+            {"Dua_Afasy.mp3", "دعاء بعد الأذان — مشاري العفاسي"},
+            {"Dua_after_adhan_Hisn_Al_Muslim.mp3", "دعاء بعد الأذان — حصن المسلم (حمد الدريهم)"},
+    };
+
+    /** Built-in library: pick a sound, it is downloaded once to the device and then works offline. */
     private void showLibrarySounds(final String dir, final TextCb cb, final Runnable back) {
-        toast("جارٍ جلب قائمة الأصوات من GitHub…");
-        new Thread(() -> {
-            final List<String[]> items = new ArrayList<>();
-            String err = null;
-            final List<String> srcs = new ArrayList<>();
-            srcs.add("https://api.github.com/repos/Moh-F/Mawaqit-Home/contents/audio/" + dir + "?ref=main");
-            if ("adhan".equals(dir))
-                srcs.add("https://api.github.com/repos/Kiwifu/adhan-mp3/contents/");
-            for (String src : srcs) {
-                try {
-                    java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(src).openConnection();
-                    h.setRequestProperty("User-Agent", "MawaqitHome");
-                    h.setRequestProperty("Accept", "application/vnd.github+json");
-                    h.setConnectTimeout(12000);
-                    h.setReadTimeout(20000);
-                    java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
-                    try (java.io.InputStream in = h.getInputStream()) {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
-                    }
-                    org.json.JSONArray ar = new org.json.JSONArray(b.toString("UTF-8"));
-                    for (int i = 0; i < ar.length(); i++) {
-                        org.json.JSONObject o = ar.getJSONObject(i);
-                        String nm = o.optString("name");
-                        if (!nm.toLowerCase().matches(".*\\.(mp3|ogg|m4a|wav|aac)$")) continue;
-                        items.add(new String[]{nm, o.optString("download_url")});
-                    }
-                } catch (Exception e) {
-                    if (items.isEmpty()) err = e.toString();
-                }
-            }
-            final String ferr = err;
-            runOnUiThread(() -> {
-                if (items.isEmpty()) {
-                    toast(ferr != null ? "تعذّر جلب القائمة: " + ferr : "لا توجد ملفات بعد في مجلد " + dir + " بالمستودع");
-                    back.run();
-                    return;
-                }
-                final String[] names = new String[items.size()];
-                for (int i = 0; i < names.length; i++)
-                    names[i] = items.get(i)[0].replaceAll("\\.[^.]+$", "").replace('_', ' ').replace('-', ' ');
-                choice("أصوات مكتبة اللانشر (GitHub)", names, -1, i -> downloadLibrarySound(items.get(i)[0], items.get(i)[1], cb),
-                        back);
-            });
-        }, "audiolib").start();
+        final String[][] cat = "dua".equals(dir) ? DUA_CATALOG : ADHAN_CATALOG;
+        final File lib = new File(getFilesDir(), "audio/lib");
+        final String[] names = new String[cat.length];
+        for (int i = 0; i < cat.length; i++) {
+            File f = new File(lib, cat[i][0].replaceAll("[^A-Za-z0-9._-]", "_"));
+            names[i] = (f.exists() && f.length() > 1000 ? "✓  " : "⬇  ") + cat[i][1];
+        }
+        choice("مكتبة الأصوات (✓ محمّل على الجهاز • ⬇ يُحمَّل عند الاختيار)", names, -1, i -> downloadLibrarySound(cat[i][0],
+                "https://raw.githubusercontent.com/Moh-F/Mawaqit-Home/main/audio/" + dir + "/" + cat[i][0], cb), back);
     }
 
     private void downloadLibrarySound(final String name, final String url, final TextCb cb) {
@@ -4765,7 +4751,7 @@ public class MainActivity extends Activity {
     private void pickAudioSource(final String title, final TextCb cb, final Runnable back, final String lib) {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
-        l.add("📚  من مكتبة اللانشر (ملفات المستودع على GitHub)");
+        l.add("📚  من مكتبة اللانشر (تُحمَّل على الجهاز وتعمل بدون إنترنت)");
         a.add(() -> showLibrarySounds(lib, cb, () -> pickAudioSource(title, cb, back, lib)));
         l.add("📱  رفع من الجوال / اللابتوب (رمز QR)");
         a.add(() -> audioFileUpload(cb));

@@ -14,7 +14,3 @@ Audio (audio/dua/Dua_after_adhan_Hisn_Al_Muslim.mp3):
   From "Islamic Pro - Azkar API" (https://github.com/YousefAsalya/Islamic-Pro-azkar-API),
   MIT License, Copyright (c) 2026 Islamic Pro - Azkar API Contributors.
   Recitation of Hisn Al-Muslim (Sheikh Sa'eed Al-Qahtani) by Hamad Al-Durayhim.
-
-The adhan list in the app can also read file names live from the public repository
-Kiwifu/adhan-mp3. Those files are NOT stored in this repository; they are downloaded
-to the device only when the user picks one. Their rights belong to their owners.
