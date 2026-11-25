@@ -4987,8 +4987,10 @@ public class MainActivity extends Activity {
         if (idx < 0) return;
         long at = in.getLongExtra("adhan_at", 0L);
         in.removeExtra("adhan");
+        final boolean tst = in.getBooleanExtra("adhan_test", false);
+        in.removeExtra("adhan_test");
         if (System.currentTimeMillis() - at > 5 * 60_000L) return;        // stale intent (e.g. app restarted later)
-        startAdhan(idx, false);
+        startAdhan(idx, tst);
     }
 
     private void startAdhan(int idx, boolean test) {
@@ -5460,6 +5462,22 @@ public class MainActivity extends Activity {
         a.add(() -> {
             toast("بدأت التجربة");
             startAdhan(-1, true);
+        });
+        l.add("⏲  تجربة الأذان بعد دقيقتين (أطفئ الشاشة أو التلفزيون وانتظر)");
+        a.add(() -> {
+            try {
+                android.app.AlarmManager am = (android.app.AlarmManager) getSystemService(ALARM_SERVICE);
+                Intent ti = new Intent(this, AdhanReceiver.class).putExtra("idx", 1).putExtra("test", true);
+                android.app.PendingIntent pi = android.app.PendingIntent.getBroadcast(this, 8, ti,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+                long at = System.currentTimeMillis() + 120_000L;
+                if (Build.VERSION.SDK_INT >= 23) am.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, at, pi);
+                else am.setExact(android.app.AlarmManager.RTC_WAKEUP, at, pi);
+                toast("سيبدأ الأذان بعد دقيقتين — أطفئ الشاشة الآن وانتظر");
+                AppLog.info("ADHAN", "2-minute test armed");
+            } catch (Exception e) {
+                toast("تعذّر ضبط التجربة");
+            }
         });
         l.add("▶  تجربة أذان الفجر الآن");
         a.add(() -> {
