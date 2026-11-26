@@ -595,6 +595,7 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);                      // start the network as early as possible
         buildWeatherCard();
         buildCdCard();
+        buildPreBadge();
         sync = new RemoteSync(this, prefs, syncHost);
         if (RemoteSync.configured(prefs)) sync.start();
         buildStrip();
@@ -4723,6 +4724,11 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 AppLog.error("COUNTDOWN", "update failed", e);
             }
+            try {
+                preUpdate();
+            } catch (Exception e) {
+                AppLog.error("PRE", "update failed", e);
+            }
             handler.postDelayed(this, 1000L);
         }
     };
@@ -5089,6 +5095,174 @@ public class MainActivity extends Activity {
             if (v != null && v.hasVibrator()) v.vibrate(new long[]{0, 700, 300, 700, 300, 700}, -1);
         } catch (Exception ignored) {
         }
+    }
+
+    // ------------------------------------------------------------------ Pre-prayer badge
+
+    private TextView preBadge;
+    private boolean preShown;
+    private long preDemoStart;
+
+    private void buildPreBadge() {
+        preBadge = new TextView(this);
+        preBadge.setVisibility(View.GONE);
+        preBadge.setGravity(Gravity.CENTER);
+        preBadge.setTextDirection(View.TEXT_DIRECTION_RTL);
+        preBadge.setTypeface(tf(true));
+        preBadge.setTextColor(Color.WHITE);
+        preBadge.setIncludeFontPadding(false);
+        preBadge.setElevation(dp(30));
+        preBadge.setClickable(false);
+        root.addView(preBadge, new FrameLayout.LayoutParams(10, 10));
+        preStyle();
+    }
+
+    private int preDiameter() {
+        return Math.round(unit() * 78f * Math.max(50, Math.min(250, prefs.getInt("pre_size", 100))) / 100f);
+    }
+
+    private void preStyle() {
+        if (preBadge == null) return;
+        int d = preDiameter();
+        int al = Math.max(10, Math.min(100, prefs.getInt("pre_alpha", 72)));
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(argb(al * 255 / 100, 0x0B, 0x1E, 0x17));
+        g.setStroke(Math.max(1, Math.round(d / 40f)), argb(Math.min(255, al * 255 / 100 + 40), 0xF4, 0xC9, 0x5D));
+        preBadge.setBackground(g);
+        int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
+        int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(d, d,
+                (corner < 2 ? Gravity.TOP : Gravity.BOTTOM) | (corner % 2 == 0 ? Gravity.LEFT : Gravity.RIGHT));
+        lp.setMargins(mg, mg, mg, mg);
+        preBadge.setLayoutParams(lp);
+    }
+
+    private void preUpdate() {
+        if (preBadge == null) return;
+        long now = System.currentTimeMillis();
+        boolean demo = preDemoStart > 0 && now - preDemoStart < 20_000L;
+        boolean ok = (prefs.getBoolean("pre_on", true) || demo) && !adhanRunning && !quranRunning && annView == null;
+        long best = Long.MAX_VALUE;
+        int bi = -1;
+        if (ok && demo) {
+            bi = 1;
+            best = now + 590_000L - (now - preDemoStart);
+        } else if (ok) {
+            int mask = prefs.getInt("pre_mask", 31);
+            for (int k = 0; k < 5; k++) {
+                if ((mask & (1 << k)) == 0) continue;
+                long t = nextPrayer(k);
+                if (t > 0 && t < best) {
+                    best = t;
+                    bi = k;
+                }
+            }
+        }
+        long rem = best - now;
+        long lead = Math.max(0, Math.min(10, prefs.getInt("adhan_pre_secs", 3))) * 1000L;
+        boolean show = ok && bi >= 0 && rem > (demo ? 0 : lead)
+                && rem <= (demo ? 600_000L : Math.max(1, Math.min(120, prefs.getInt("pre_min", 10))) * 60_000L);
+        if (show) {
+            long sec = (rem + 999L) / 1000L;
+            String tm = prefs.getBoolean("pre_secs", true)
+                    ? String.format(java.util.Locale.US, "%02d:%02d", sec / 60, sec % 60)
+                    : ((sec + 59) / 60) + " د";
+            String nm = PRAYER_NAMES[bi];
+            if (bi == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) nm = "الجمعة";
+            android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+            float d = preDiameter();
+            int a0 = sb.length();
+            sb.append(nm);
+            sb.setSpan(new android.text.style.ForegroundColorSpan(0xFFF4C95D), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * 0.20f)), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.append("\n");
+            int a1 = sb.length();
+            sb.append("بعد\n");
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * 0.12f)), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.ForegroundColorSpan(0xCCFFFFFF), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            int a2 = sb.length();
+            sb.append(tm);
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (prefs.getBoolean("pre_secs", true) ? 0.21f : 0.19f))),
+                    a2, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            preBadge.setText(sb);
+            preBadge.setLineSpacing(0f, 0.95f);
+        }
+        if (show && !preShown) {
+            preShown = true;
+            preStyle();
+            preBadge.setAlpha(0f);
+            preBadge.setVisibility(View.VISIBLE);
+            preBadge.bringToFront();
+            preBadge.animate().alpha(1f).setDuration(500L).setListener(null).start();
+        } else if (!show && preShown) {
+            preShown = false;
+            preBadge.animate().alpha(0f).setDuration(400L).withEndAction(() -> {
+                if (!preShown) preBadge.setVisibility(View.GONE);
+            }).start();
+        }
+    }
+
+    private void showPreSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showPreSettings;
+        final Runnable live = () -> {
+            preStyle();
+            preDemoStart = System.currentTimeMillis();
+            preUpdate();
+        };
+        l.add("🔔  تنبيه قبل الصلاة:  " + onOff(prefs.getBoolean("pre_on", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("pre_on", !prefs.getBoolean("pre_on", true)).apply();
+            showPreSettings();
+        });
+        l.add("⏱  يظهر قبل الصلاة بـ:  " + prefs.getInt("pre_min", 10) + " دقيقة");
+        a.add(() -> numberDialog("يظهر الدائرة قبل الصلاة بكم دقيقة", "pre_min", 10, 1, 120, " د", null, null, back, back));
+        l.add("🕒  إعلان «سيُرفع الآن أذان…» قبل الأذان بـ:  " + (prefs.getInt("adhan_pre_secs", 3) == 0 ? "معطّل"
+                : prefs.getInt("adhan_pre_secs", 3) + " ثوانٍ"));
+        a.add(() -> numberDialog("مدّة الإعلان قبل الأذان (0 = بدون إعلان)", "adhan_pre_secs", 3, 0, 10, " ث", "معطّل", null,
+                () -> {
+                    WakeScheduler.scheduleAdhan(this);
+                    showPreSettings();
+                }, back));
+        l.add("📍  الزاوية:  " + new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"}[Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)))]);
+        a.add(() -> choice("زاوية الدائرة", new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"},
+                prefs.getInt("pre_corner", 1), i -> {
+                    prefs.edit().putInt("pre_corner", i).apply();
+                    live.run();
+                    showPreSettings();
+                }, back));
+        l.add("🔲  الحجم:  " + prefs.getInt("pre_size", 100) + "%");
+        a.add(() -> numberDialog("حجم الدائرة", "pre_size", 100, 50, 250, "%", null, live, back, back));
+        l.add("🔆  الشفافية:  " + prefs.getInt("pre_alpha", 72) + "%");
+        a.add(() -> numberDialog("شفافية الدائرة (أقل = أنعم)", "pre_alpha", 72, 10, 100, "%", null, live, back, back));
+        l.add("↔  البعد عن الحافة:  " + prefs.getInt("pre_mg", 14));
+        a.add(() -> numberDialog("البعد عن حافة الشاشة", "pre_mg", 14, 0, 100, "", null, live, back, back));
+        l.add("⏲  إظهار الثواني:  " + onOff(prefs.getBoolean("pre_secs", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("pre_secs", !prefs.getBoolean("pre_secs", true)).apply();
+            showPreSettings();
+        });
+        l.add("📿  الصلوات المشمولة:  " + maskNames(prefs.getInt("pre_mask", 31)));
+        a.add(() -> {
+            final int cur = prefs.getInt("pre_mask", 31);
+            final boolean[] on = new boolean[5];
+            for (int k = 0; k < 5; k++) on[k] = (cur & (1 << k)) != 0;
+            dialog("الصلوات المشمولة بالتنبيه").setMultiChoiceItems(PRAYER_NAMES, on, (d, w, c) -> on[w] = c)
+                    .setPositiveButton("حفظ", (d, w) -> {
+                        int m = 0;
+                        for (int k = 0; k < 5; k++) if (on[k]) m |= 1 << k;
+                        prefs.edit().putInt("pre_mask", m).apply();
+                        showPreSettings();
+                    }).setNegativeButton("إلغاء", (d, w) -> showPreSettings()).show();
+        });
+        l.add("▶  معاينة الدائرة (20 ثانية)");
+        a.add(() -> {
+            live.run();
+            toast("انظر إلى الزاوية");
+        });
+        menu("🔔 تنبيه قبل الصلاة", l, a, this::showAdhanSettings);
     }
 
     // ------------------------------------------------------------------ Remote control & sync (GitHub)
@@ -5823,8 +5997,84 @@ public class MainActivity extends Activity {
         in.removeExtra("adhan");
         final boolean tst = in.getBooleanExtra("adhan_test", false);
         in.removeExtra("adhan_test");
+        long target = in.getLongExtra("adhan_target", 0L);
+        in.removeExtra("adhan_target");
         if (System.currentTimeMillis() - at > 5 * 60_000L) return;        // stale intent (e.g. app restarted later)
-        startAdhan(idx, tst);
+        int lead = Math.max(0, Math.min(10, prefs.getInt("adhan_pre_secs", 3)));
+        if (tst && target == 0L) target = System.currentTimeMillis() + lead * 1000L;
+        announceAdhan(idx, target, tst);
+    }
+
+    // ---- "the adhan will be raised now" announcement, a few seconds before the adhan
+
+    private TextView annView;
+    private Boolean annReturn;
+    private Runnable annGo;
+
+    private void hideAnnounce() {
+        if (annGo != null) handler.removeCallbacks(annGo);
+        annGo = null;
+        if (annView != null) {
+            root.removeView(annView);
+            annView = null;
+        }
+    }
+
+    private void announceAdhan(final int idx, long target, final boolean test) {
+        long wait = target - System.currentTimeMillis();
+        if (adhanRunning || annView != null || wait <= 400L || wait > 15_000L) {
+            startAdhan(idx, test);
+            return;
+        }
+        if (!test) {
+            String key = new java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(new java.util.Date())
+                    + "-" + idx;
+            if (!prefs.getBoolean("adhan_on", false) || key.equals(prefs.getString("adhan_last", "")) || soundMode() != 0) {
+                startAdhan(idx, test);                                   // nothing will play: let it handle that
+                return;
+            }
+        }
+        annReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test;
+        if (quranRunning) stopQuran(false);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        lastInput = SystemClock.elapsedRealtime();
+        pendingReturn = null;
+        try {
+            if (topDlg != null) topDlg.dismiss();
+        } catch (Exception ignored) {
+        }
+        if (railOpen) closeRail(false);
+        if (sizeH > 0) applyStage(0, false);
+        pauseNativeVideo();
+        String nm = idx >= 0 && idx < 5 ? PRAYER_NAMES[idx] : "";
+        if (idx == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) nm = "الجمعة";
+        TextView t = new TextView(this);
+        t.setText("🕌  سيُرفع الآن أذان " + nm);
+        t.setTextColor(Color.WHITE);
+        t.setTypeface(tf(true));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(30));
+        t.setGravity(Gravity.CENTER);
+        t.setTextDirection(View.TEXT_DIRECTION_RTL);
+        t.setPadding(dp(32), dp(20), dp(32), dp(20));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0xE6081510);
+        g.setCornerRadius(dp(24));
+        g.setStroke(Math.max(1, dp(2)), 0xFFF4C95D);
+        t.setBackground(g);
+        t.setElevation(dp(40));
+        t.setAlpha(0f);
+        root.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        t.animate().alpha(1f).setDuration(350L).start();
+        annView = t;
+        AppLog.info("ADHAN", "announcing " + nm + ", adhan in " + wait + " ms");
+        annGo = () -> {
+            annGo = null;
+            startAdhan(idx, test);
+        };
+        handler.postDelayed(annGo, wait);
     }
 
     private void startAdhan(int idx, boolean test) {
@@ -5843,7 +6093,9 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-        adhanReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test;
+        adhanReturn = annReturn != null ? annReturn : prefs.getBoolean("adhan_return", true) && !resumed && !test;
+        annReturn = null;
+        hideAnnounce();
         adhanRunning = true;
         adhanEndScheduled = false;
         duaTimeUp = false;
@@ -6256,6 +6508,8 @@ public class MainActivity extends Activity {
             WakeScheduler.scheduleAdhan(this);
             showAdhanSettings();
         });
+        l.add("🔔  تنبيه قبل الصلاة (دائرة صغيرة + إعلان قبل الأذان):  " + onOff(prefs.getBoolean("pre_on", true)));
+        a.add(this::showPreSettings);
         l.add("📿  الصلوات المفعّلة:  " + maskNames(prefs.getInt("adhan_mask", 31)));
         a.add(() -> {
             final int cur = prefs.getInt("adhan_mask", 31);

@@ -119,6 +119,7 @@ public final class WakeScheduler {
             if (t == null) return;
             int mask = p.getInt("adhan_mask", 31);
             long now = System.currentTimeMillis();
+            long lead = Math.max(0, Math.min(10, p.getInt("adhan_pre_secs", 3))) * 1000L;   // announcement before the adhan
             long best = Long.MAX_VALUE;
             int bi = -1;
             for (int d = 0; d <= 1; d++) {
@@ -131,7 +132,7 @@ public final class WakeScheduler {
                 for (int k = 0; k < 5; k++) {
                     if ((mask & (1 << k)) == 0) continue;
                     long at = c.getTimeInMillis() + (long) t[k] * 60_000L;
-                    if (at > now + 1000L && at < best) {
+                    if (at - lead > now + 1000L && at < best) {
                         best = at;
                         bi = k;
                     }
@@ -139,9 +140,10 @@ public final class WakeScheduler {
             }
             if (bi < 0) return;
             i.putExtra("idx", bi);
+            i.putExtra("target", best);
             PendingIntent pi = PendingIntent.getBroadcast(ctx, 8, i, PendingIntent.FLAG_UPDATE_CURRENT);
-            if (Build.VERSION.SDK_INT >= 23) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, best, pi);
-            else am.setExact(AlarmManager.RTC_WAKEUP, best, pi);
+            if (Build.VERSION.SDK_INT >= 23) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, best - lead, pi);
+            else am.setExact(AlarmManager.RTC_WAKEUP, best - lead, pi);
             p.edit().putLong("next_adhan", best).putInt("next_adhan_idx", bi).apply();
         } catch (Exception e) {
             AppLog.error("ADHAN", "schedule failed", e);

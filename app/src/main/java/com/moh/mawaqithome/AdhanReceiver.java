@@ -16,6 +16,7 @@ public class AdhanReceiver extends BroadcastReceiver {
             i.putExtra("adhan", idx);
             i.putExtra("adhan_at", System.currentTimeMillis());
             i.putExtra("adhan_test", intent.getBooleanExtra("test", false));
+            i.putExtra("adhan_target", intent.getLongExtra("target", 0L));
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
                     | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
             ctx.startActivity(i);
