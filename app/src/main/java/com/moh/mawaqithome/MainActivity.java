@@ -1260,6 +1260,22 @@ public class MainActivity extends Activity {
 
     private int gRow() { return fine("w_f_row", tgt(prefs.getInt("w_rowgap", 1))); }
 
+    private int gDate() { return fine("w_f_date", 0); }
+
+    private float wp(String k) {
+        return Math.max(30, Math.min(300, prefs.getInt(k, 100))) / 100f;
+    }
+
+    private static final String[] WX_COL_NAMES = {"تلقائي", "ذهبي", "أبيض", "أخضر فاتح", "أزرق فاتح", "برتقالي", "وردي", "رمادي", "لون الواجهة"};
+    private static final String[] WX_BG_NAMES = {"تلقائي (حسب الوقت)", "أسود", "أخضر داكن", "أزرق داكن", "بنفسجي داكن", "رمادي داكن"};
+
+    /** Colour chosen for a weather element, or the built-in colour when left on automatic. */
+    private int wcol(String key, int auto) {
+        int i = prefs.getInt(key, 0);
+        if (i <= 0 || i > CD_COLS.length) return auto;
+        return CD_COLS[i - 1] == 0 ? acc() : CD_COLS[i - 1];
+    }
+
     private int gLine() { return fine("w_f_line", tgt(0)); }
 
     private int gIn() { return fine("w_f_in", tgt(prefs.getInt("w_inrow", 1))); }
@@ -1381,8 +1397,11 @@ public class MainActivity extends Activity {
     private void layoutWeather() {
         updateWeatherHeader();
         weatherCard.setPadding(padL(), padT(), padR(), padB());
-        setPx(weatherCity, 12);
-        setPx(weatherAge, 10);
+        weatherCity.setTextColor(wcol("w_city_col", 0xFFF4C95D));
+        weatherAge.setTextColor(wcol("w_age_col", 0x99FFFFFF));
+        weatherCity.setTypeface(prefs.getBoolean("w_city_bold", true) ? tf(true) : tf(false));
+        setPx(weatherCity, 12 * wp("w_city_pct"));
+        setPx(weatherAge, 10 * wp("w_age_pct"));
         LinearLayout.LayoutParams cl0 = (LinearLayout.LayoutParams) weatherCity.getLayoutParams();
         cl0.topMargin = cl0.bottomMargin = lead(weatherCity);
         weatherCity.setLayoutParams(cl0);
@@ -1390,7 +1409,10 @@ public class MainActivity extends Activity {
         al0.topMargin = al0.bottomMargin = lead(weatherAge);
         weatherAge.setLayoutParams(al0);
         LinearLayout.LayoutParams sp = (LinearLayout.LayoutParams) wSep.getLayoutParams();
-        sp.height = Math.max(1, wsc(1));
+        sp.height = Math.max(1, wsc(Math.max(1, prefs.getInt("w_sep_th", 1))));
+        wSep.setBackgroundColor(prefs.getInt("w_sep_col", 0) > 0
+                ? withAlpha(wcol("w_sep_col", 0x22FFFFFF), Math.max(5, Math.min(100, prefs.getInt("w_sep_a", 60))) * 255 / 100)
+                : 0x22FFFFFF);
         sp.topMargin = fine("w_f_head1", tgt(5));
         sp.bottomMargin = fine("w_f_head2", tgt(3));
         wSep.setLayoutParams(sp);
@@ -1405,8 +1427,8 @@ public class MainActivity extends Activity {
         {                                              // measure real text so columns hug their content
             int dW = 0, iW = 0, tW = 0, subW = 0;
             for (int i = 0; i < 3; i++) {
-                setPx(wDay[i], 12);
-                setPx(wTemp[i], 15);
+                setPx(wDay[i], 12 * wp("w_day_pct"));
+                setPx(wTemp[i], 15 * wp("w_temp_pct"));
                 setPx(wSub[i], dsz());
                 setPx(wIcon[i], 26 * prefs.getInt("w_iconsz", 100) / 100f);
                 if (i >= Math.max(1, Math.min(3, prefs.getInt("w_days", 3)))) continue;
@@ -1465,9 +1487,16 @@ public class MainActivity extends Activity {
             main.setOrientation(cols ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
             main.setBaselineAligned(true);                 // day, icon and temperature share one baseline
             main.setGravity(cols ? Gravity.CENTER_HORIZONTAL : Gravity.NO_GRAVITY);
-            setPx(wDay[i], 12);
+            setPx(wDay[i], 12 * wp("w_day_pct"));
             setPx(wIcon[i], 26 * prefs.getInt("w_iconsz", 100) / 100f);
-            setPx(wTemp[i], 15);
+            setPx(wTemp[i], 15 * wp("w_temp_pct"));
+            wDay[i].setTextColor(wcol("w_day_col", Color.WHITE));
+            wTemp[i].setTextColor(wcol("w_temp_col", Color.WHITE));
+            wDay[i].setTypeface(prefs.getBoolean("w_day_bold", true) ? tf(true) : tf(false));
+            wTemp[i].setTypeface(prefs.getBoolean("w_temp_bold", true) ? tf(true) : tf(false));
+            wDay[i].setLineSpacing(cols && prefs.contains("w_f_date") ? gDate() : 0f, 1f);
+            wSub[i].setTextColor(wcol("w_det_col", 0xE6FFFFFF));
+            for (int k = 0; k < 5; k++) wFld[i][k].setTextColor(wcol("w_det_col", 0xE6FFFFFF));
             setPx(wSub[i], dsz());
             int al = prefs.getInt("w_align", 0);            // 0 right, 1 centre, 2 left (day text)
             wDay[i].setGravity(cols ? Gravity.CENTER : (al == 1 ? Gravity.CENTER
@@ -1611,8 +1640,15 @@ public class MainActivity extends Activity {
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{((a * 255 / 100) << 24) | (c0 & 0xFFFFFF),
                         ((a * 255 / 100) << 24) | (c1 & 0xFFFFFF)});
+        int bi = prefs.getInt("w_bg", 0);
+        if (bi > 0 && bi <= CD_BGS.length - 1) {
+            int sc = CD_BGS[bi];
+            bg.setColors(new int[]{((a * 255 / 100) << 24) | (sc & 0xFFFFFF), ((a * 255 / 100) << 24) | (sc & 0xFFFFFF)});
+        }
         int bw = prefs.getInt("w_border", 1);
-        if (bw > 0) bg.setStroke(Math.max(1, dp(bw)), argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
+        if (bw > 0) bg.setStroke(Math.max(1, dp(bw)), prefs.getInt("w_border_col", 0) > 0
+                ? withAlpha(wcol("w_border_col", 0xFFF4C95D), a * 90 / 100 * 255 / 100)
+                : argb(a * 90 / 100, 0xF4, 0xC9, 0x5D));
         bg.setCornerRadius(wsc(prefs.getInt("w_radius", 16)));
         weatherCard.setBackground(bg);
         weatherCard.setVisibility(prefs.getBoolean("w_show", true) ? View.VISIBLE : View.GONE);
@@ -1664,9 +1700,18 @@ public class MainActivity extends Activity {
         SpannableString sp = new SpannableString(full);
         if (!date.isEmpty()) {
             int st = name.length() + (colsMode ? 1 : 2);
-            sp.setSpan(new ForegroundColorSpan(0xCCFFFFFF), st, full.length(),
+            sp.setSpan(new ForegroundColorSpan(wcol("w_date_col", 0xCCFFFFFF)), st, full.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sp.setSpan(new AbsoluteSizeSpan(wsc(11)), st, full.length(),
+            if (!colsMode && prefs.contains("w_f_date")) {
+                final int gw = Math.max(0, gDate());
+                sp.setSpan(new android.text.style.ReplacementSpan() {
+                    @Override public int getSize(android.graphics.Paint p, CharSequence t, int a, int b,
+                                                 android.graphics.Paint.FontMetricsInt fm) { return gw; }
+                    @Override public void draw(Canvas c, CharSequence t, int a, int b, float x, int top, int y, int bt,
+                                               android.graphics.Paint p) { }
+                }, name.length() + 1, name.length() + 2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            sp.setSpan(new AbsoluteSizeSpan(wsc(11 * wp("w_date_pct"))), st, full.length(),
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         return sp;
@@ -5005,13 +5050,20 @@ public class MainActivity extends Activity {
 
     // --- countdown appearance: small generic helpers
 
+    private Runnable styleLive;
+
+    private void runStyleLive() {
+        if (styleLive != null) styleLive.run();
+        else {
+            cdRefreshNow();
+            applyCdStyle();
+        }
+    }
+
     private void cdNum(List<String> l, List<Runnable> a, String label, final String key, final int def, final int min,
                        final int max, final String unit, final Runnable back, final boolean fineKey) {
         l.add(label + ":  " + (prefs.contains(key) ? prefs.getInt(key, def) + unit : (fineKey ? "تلقائي (" + def + ")" : def + unit)));
-        a.add(() -> numberDialog(label, key, def, min, max, unit, null, () -> {
-            cdRefreshNow();
-            applyCdStyle();
-        }, back, back));
+        a.add(() -> numberDialog(label, key, def, min, max, unit, null, this::runStyleLive, back, back));
     }
 
     private void cdColor(List<String> l, List<Runnable> a, String label, final String key, final int def,
@@ -5020,8 +5072,7 @@ public class MainActivity extends Activity {
         l.add(label + ":  " + names[cur]);
         a.add(() -> choice(label, names, Math.max(0, Math.min(names.length - 1, prefs.getInt(key, def))), i -> {
             prefs.edit().putInt(key, i).apply();
-            cdRefreshNow();
-            applyCdStyle();
+            runStyleLive();
             back.run();
         }, back));
     }
@@ -5030,13 +5081,13 @@ public class MainActivity extends Activity {
         l.add(label + ":  " + onOff(prefs.getBoolean(key, def)));
         a.add(() -> {
             prefs.edit().putBoolean(key, !prefs.getBoolean(key, def)).apply();
-            cdRefreshNow();
-            applyCdStyle();
+            runStyleLive();
             back.run();
         });
     }
 
     private void showCdFonts() {
+        styleLive = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showCdFonts;
@@ -5056,6 +5107,7 @@ public class MainActivity extends Activity {
     }
 
     private void showCdIcons() {
+        styleLive = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showCdIcons;
@@ -5066,6 +5118,7 @@ public class MainActivity extends Activity {
     }
 
     private void showCdSep() {
+        styleLive = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showCdSep;
@@ -5080,6 +5133,7 @@ public class MainActivity extends Activity {
     }
 
     private void showCdSpacing() {
+        styleLive = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showCdSpacing;
@@ -5104,6 +5158,7 @@ public class MainActivity extends Activity {
     }
 
     private void showCdFrame() {
+        styleLive = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showCdFrame;
@@ -7185,13 +7240,13 @@ public class MainActivity extends Activity {
     /** Pixel-level spacing of every part of the weather card (steps of half a dp, negative values allowed). */
     private void showWeatherFine() {
         final String[][] items = {
-                {"w_f_dayicon", "اسم اليوم ↔ الأيقونة"}, {"w_f_icontemp", "الأيقونة ↔ الحرارة"},
+                {"w_f_dayicon", "اسم اليوم ↔ الأيقونة"}, {"w_f_date", "اسم اليوم ↔ التاريخ (سالب = أقرب)"}, {"w_f_icontemp", "الأيقونة ↔ الحرارة"},
                 {"w_f_sub", "الحرارة ↔ التفاصيل (مطر/رياح…)"}, {"w_f_col", "بين أعمدة الأيام"},
                 {"w_f_row", "بين صفوف الأيام"}, {"w_f_in", "فوق التفاصيل (بعد الحرارة)"}, {"w_f_line", "بين أسطر التفاصيل (رطوبة/مطر…)"},
                 {"w_f_cgap", "بين «مدينتك الحالية» واسم المدينة"}, {"w_f_head1", "تحت المدينة (فوق الخط)"}, {"w_f_head2", "تحت الخط (فوق الأيام)"},
                 {"w_f_padt", "هامش البطاقة: أعلى"}, {"w_f_padb", "هامش البطاقة: أسفل"},
                 {"w_f_padl", "هامش البطاقة: يسار"}, {"w_f_padr", "هامش البطاقة: يمين"}};
-        final int[] autoVals = {fineSteps(gDayIcon()), fineSteps(gIconTemp()), fineSteps(gSub()), fineSteps(gCol()),
+        final int[] autoVals = {fineSteps(gDayIcon()), 0, fineSteps(gIconTemp()), fineSteps(gSub()), fineSteps(gCol()),
                 fineSteps(gRow()), fineSteps(gIn()), fineSteps(gLine()), fineSteps(gCity()), fineSteps(tgt(5)), fineSteps(tgt(3)), fineSteps(padT()),
                 fineSteps(padB()), fineSteps(padL()), fineSteps(padR())};
         final List<String> l = new ArrayList<>();
@@ -7215,10 +7270,59 @@ public class MainActivity extends Activity {
         menu("🎛 ضبط دقيق لمسافات البطاقة", l, a, this::showWeatherSettings);
     }
 
+    private final Runnable wxLive = () -> {
+        layoutWeather();
+        applyWeatherStyle();
+        updateWeatherUi();
+    };
+
+    private void showWeatherStyle() {
+        styleLive = wxLive;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showWeatherStyle;
+        l.add("— اسم اليوم —");
+        a.add(back);
+        cdNum(l, a, "حجم خط اسم اليوم", "w_day_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون اسم اليوم", "w_day_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "اسم اليوم عريض", "w_day_bold", true, back);
+        l.add("— التاريخ —");
+        a.add(back);
+        cdNum(l, a, "حجم خط التاريخ", "w_date_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون التاريخ", "w_date_col", 0, WX_COL_NAMES, back);
+        l.add("— الحرارة —");
+        a.add(back);
+        cdNum(l, a, "حجم خط الحرارة", "w_temp_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون الحرارة", "w_temp_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "الحرارة عريضة", "w_temp_bold", true, back);
+        l.add("— الأيقونة والتفاصيل —");
+        a.add(back);
+        cdNum(l, a, "حجم أيقونة الطقس", "w_iconsz", 100, 40, 300, "%", back, false);
+        cdNum(l, a, "حجم التفاصيل (رطوبة/مطر…)", "w_dsz", 100, 50, 250, "%", back, false);
+        cdColor(l, a, "لون التفاصيل", "w_det_col", 0, WX_COL_NAMES, back);
+        l.add("— المدينة وآخر تحديث —");
+        a.add(back);
+        cdNum(l, a, "حجم خط «مدينتك الحالية» والمدينة", "w_city_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون المدينة", "w_city_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "المدينة عريضة", "w_city_bold", true, back);
+        cdNum(l, a, "حجم خط «آخر تحديث»", "w_age_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون «آخر تحديث»", "w_age_col", 0, WX_COL_NAMES, back);
+        l.add("— الخط الفاصل والإطار والخلفية —");
+        a.add(back);
+        cdNum(l, a, "سماكة الخط تحت المدينة", "w_sep_th", 1, 1, 12, "", back, false);
+        cdColor(l, a, "لون الخط", "w_sep_col", 0, WX_COL_NAMES, back);
+        cdNum(l, a, "شفافية الخط (عند اختيار لون)", "w_sep_a", 60, 5, 100, "%", back, false);
+        cdColor(l, a, "لون الإطار", "w_border_col", 0, WX_COL_NAMES, back);
+        cdColor(l, a, "لون الخلفية", "w_bg", 0, WX_BG_NAMES, back);
+        menu("🎨 مظهر عناصر بطاقة الطقس", l, a, this::showWeatherSettings);
+    }
+
     private void showWeatherSettings() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showWeatherSettings;
+        l.add("🎨  مظهر كل عنصر (ألوان، أحجام، خطوط…)");
+        a.add(this::showWeatherStyle);
         l.add("👁  إظهار بطاقة الطقس:  " + onOff(prefs.getBoolean("w_show", true)));
         a.add(() -> {
             prefs.edit().putBoolean("w_show", !prefs.getBoolean("w_show", true)).apply();
