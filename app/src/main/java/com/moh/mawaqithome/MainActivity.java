@@ -4649,7 +4649,18 @@ public class MainActivity extends Activity {
 
     /** Every digit gets the same cell width, so counting seconds never makes the text jiggle. */
     private static CharSequence tabDigits(CharSequence src) {
-        android.text.SpannableString sp = new android.text.SpannableString(src);
+        StringBuilder wrapped = new StringBuilder();
+        boolean inRun = false;
+        for (int i = 0; i < src.length(); i++) {                    // digit runs are forced left-to-right: "59" stays "59"
+            char ch = src.charAt(i);
+            boolean dg = ch >= '0' && ch <= '9';
+            if (dg && !inRun) wrapped.append('\u202A');
+            if (!dg && inRun) wrapped.append('\u202C');
+            inRun = dg;
+            wrapped.append(ch);
+        }
+        if (inRun) wrapped.append('\u202C');
+        android.text.SpannableString sp = new android.text.SpannableString(wrapped);
         for (int i = 0; i < sp.length(); i++) {
             char c = sp.charAt(i);
             if (c >= '0' && c <= '9') {
@@ -5224,10 +5235,9 @@ public class MainActivity extends Activity {
     private boolean preInWm;
 
     private WindowManager.LayoutParams preWmLp() {
-        int d = preDiameter();
         int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
         int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
-        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(d, d,
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(preW(), preH(),
                 Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                         : WindowManager.LayoutParams.TYPE_PHONE,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -5262,6 +5272,12 @@ public class MainActivity extends Activity {
         }
     }
 
+    private int preShape() { return Math.max(0, Math.min(2, prefs.getInt("pre_shape", 0))); }   // 0 pill, 1 rectangle, 2 circle
+
+    private int preW() { return preShape() == 2 ? preDiameter() : Math.round(preDiameter() * 1.8f); }
+
+    private int preH() { return preShape() == 2 ? preDiameter() : Math.round(preDiameter() * 0.78f); }
+
     private int preDiameter() {
         return Math.round(unit() * 78f * Math.max(50, Math.min(250, prefs.getInt("pre_size", 100))) / 100f);
     }
@@ -5271,7 +5287,11 @@ public class MainActivity extends Activity {
         int d = preDiameter();
         int al = Math.max(10, Math.min(100, prefs.getInt("pre_alpha", 72)));
         GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
+        if (preShape() == 2) g.setShape(GradientDrawable.OVAL);
+        else {
+            g.setShape(GradientDrawable.RECTANGLE);
+            g.setCornerRadius(preShape() == 0 ? preH() / 2f : preH() * 0.2f);
+        }
         g.setColor(argb(al * 255 / 100, 0x0B, 0x1E, 0x17));
         g.setStroke(Math.max(1, Math.round(d / 40f)), argb(Math.min(255, al * 255 / 100 + 40), 0xF4, 0xC9, 0x5D));
         preBadge.setBackground(g);
@@ -5285,7 +5305,7 @@ public class MainActivity extends Activity {
         }
         int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
         int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(d, d,
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(preW(), preH(),
                 (corner < 2 ? Gravity.TOP : Gravity.BOTTOM) | (corner % 2 == 0 ? Gravity.LEFT : Gravity.RIGHT));
         lp.setMargins(mg, mg, mg, mg);
         preBadge.setLayoutParams(lp);
@@ -5326,17 +5346,19 @@ public class MainActivity extends Activity {
             if (bi == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) nm = "الجمعة";
             android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
             float d = preDiameter();
+            boolean circ = preShape() == 2;
             int a0 = sb.length();
             sb.append(nm);
             sb.setSpan(new android.text.style.ForegroundColorSpan(0xFFF4C95D), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * 0.20f)), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.append("\n");
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (circ ? 0.20f : 0.19f))), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.append(circ ? "\n" : "  ");
             int a1 = sb.length();
-            sb.append("بعد\n");
-            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * 0.12f)), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.append(circ ? "بعد\n" : "بعد");
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (circ ? 0.12f : 0.15f))), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             sb.setSpan(new android.text.style.ForegroundColorSpan(0xCCFFFFFF), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            if (!circ) sb.append("\n");
             int a2 = sb.length();
-            sb.append(tabDigits(tm));
+            sb.append("\u202A").append(tabDigits(tm)).append("\u202C");
             sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (prefs.getBoolean("pre_secs", true) ? 0.21f : 0.19f))),
                     a2, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             preBadge.setText(sb);
@@ -5395,6 +5417,13 @@ public class MainActivity extends Activity {
         a.add(() -> numberDialog("مدّة الإعلان قبل الأذان (0 = بدون إعلان)", "adhan_pre_secs", 3, 0, 10, " ث", "معطّل", null,
                 () -> {
                     WakeScheduler.scheduleAdhan(this);
+                    showPreSettings();
+                }, back));
+        l.add("⬭  الشكل:  " + new String[]{"كبسولة (دائري متطاول)", "مستطيل", "دائرة"}[Math.max(0, Math.min(2, prefs.getInt("pre_shape", 0)))]);
+        a.add(() -> choice("شكل التنبيه", new String[]{"كبسولة (دائري متطاول)", "مستطيل بزوايا مدوّرة", "دائرة"},
+                prefs.getInt("pre_shape", 0), i -> {
+                    prefs.edit().putInt("pre_shape", i).apply();
+                    live.run();
                     showPreSettings();
                 }, back));
         l.add("📍  الزاوية:  " + new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"}[Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)))]);
