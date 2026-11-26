@@ -11,6 +11,7 @@ public class AdhanReceiver extends BroadcastReceiver {
         AppLog.init(ctx);
         int idx = intent.getIntExtra("idx", -1);
         AppLog.info("ADHAN", "alarm fired for prayer " + idx);
+        WakeUtil.wakeScreen(ctx, 3 * 60_000L);
         try {
             Intent i = new Intent(ctx, MainActivity.class);
             i.putExtra("adhan", idx);
@@ -19,7 +20,7 @@ public class AdhanReceiver extends BroadcastReceiver {
             i.putExtra("adhan_target", intent.getLongExtra("target", 0L));
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
                     | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            ctx.startActivity(i);
+            WakeUtil.bringToFront(ctx, i, "حان وقت الأذان");
         } catch (Exception e) {
             AppLog.error("ADHAN", "start failed", e);
         } finally {

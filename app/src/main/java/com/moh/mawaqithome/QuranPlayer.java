@@ -41,7 +41,7 @@ final class QuranPlayer {
             {"Minshawy_Murattal_128kbps", "محمد صديق المنشاوي (مرتّل)"},
             {"Abdurrahmaan_As-Sudais_192kbps", "عبد الرحمن السديس"},
             {"Saood_ash-Shuraym_128kbps", "سعود الشريم"},
-            {"Maher_AlMuaiqly_128kbps", "ماهر المعيقلي"},
+            {"MaherAlMuaiqly128kbps", "ماهر المعيقلي"},
             {"Hudhaify_128kbps", "علي الحذيفي"},
             {"Abu_Bakr_Ash-Shaatree_128kbps", "أبو بكر الشاطري"},
             {"Ahmed_ibn_Ali_al-Ajamy_128kbps_ketaab", "أحمد بن علي العجمي"},
@@ -70,6 +70,9 @@ final class QuranPlayer {
         if ("Ahmed_ibn_Ali_al-Ajamy_128kbps_ketaab".equals(key))
             return new String[]{"Ahmed_ibn_Ali_al-Ajamy_128kbps_ketaab.net",
                     "Ahmed_ibn_Ali_al-Ajamy_64kbps_QuranExplorer.Com"};
+        if ("MaherAlMuaiqly128kbps".equals(key)) return new String[]{"Maher_AlMuaiqly_64kbps"};
+        if ("Maher_AlMuaiqly_128kbps".equals(key))                   // name used by an earlier version
+            return new String[]{"MaherAlMuaiqly128kbps", "Maher_AlMuaiqly_64kbps"};
         return new String[0];
     }
 

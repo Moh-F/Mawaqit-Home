@@ -730,6 +730,13 @@ public class MainActivity extends Activity {
         AppLog.info("APP", "destroyed");
         if (quranPlayer != null) quranPlayer.stop();
         if (sync != null) sync.stop();
+        if (preInWm) {
+            try {
+                ((WindowManager) getSystemService(WINDOW_SERVICE)).removeView(preBadge);
+            } catch (Exception ignored) {
+            }
+            preInWm = false;
+        }
         phoneSrv.stop();
         super.onDestroy();
     }
@@ -2851,6 +2858,7 @@ public class MainActivity extends Activity {
         sl.height = stripH;
         sl.width = Math.round(w * Math.max(30, Math.min(100, prefs.getInt("strip_wp", 100))) / 100f);
         sl.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        sl.bottomMargin = stripLift();
         strip.setLayoutParams(sl);
 
         topRow.setLayoutParams(new LinearLayout.LayoutParams(
@@ -2865,13 +2873,13 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams rl = (FrameLayout.LayoutParams) railScroll.getLayoutParams();
         rl.width = railW;
         rl.gravity = (railRight ? Gravity.RIGHT : Gravity.LEFT) | Gravity.TOP;
-        rl.setMargins(dp(16), dp(16), dp(16), stripH + dp(14));
-        railScroll.maxH = Math.max(dp(160), h - stripH - dp(34));
+        rl.setMargins(dp(16), dp(16), dp(16), stripH + stripLift() + dp(14));
+        railScroll.maxH = Math.max(dp(160), h - stripH - stripLift() - dp(34));
         railScroll.setLayoutParams(rl);
         railScroll.setTranslationX(railOpen ? 0f : railHidden());
 
         FrameLayout.LayoutParams bu = (FrameLayout.LayoutParams) bubble.getLayoutParams();
-        bu.bottomMargin = stripH + dp(14);
+        bu.bottomMargin = stripH + stripLift() + dp(14);
         bubble.setLayoutParams(bu);
 
         AppLog.info("LAYOUT", "screen " + w + "x" + h + " page=" + topH + " strip=" + stripH
@@ -4070,6 +4078,14 @@ public class MainActivity extends Activity {
         a.add(this::showAdhanSettings);
         l.add("⏳  العدّادات (رمضان، العيد، الفجر والمغرب، أحداثي):  " + onOff(prefs.getBoolean("cd_show", false)));
         a.add(this::showCountdownSettings);
+        l.add("⬆  رفع الشريط السفلي عن الحافة (للجوال):  " + prefs.getInt("strip_lift", isTvDevice(this) ? 0 : 18));
+        a.add(() -> numberDialog("رفع الشريط السفلي عن حافة الشاشة", "strip_lift", isTvDevice(this) ? 0 : 18, 0, 120, "",
+                null, () -> { if (sizeW > 0) onSized(sizeW, sizeH); }, this::showLauncherSettings, this::showLauncherSettings));
+        l.add("🛡  إعادة اللانشر للواجهة بعد تشغيل الجهاز:  " + onOff(prefs.getBoolean("boot_guard", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("boot_guard", !prefs.getBoolean("boot_guard", true)).apply();
+            showLauncherSettings();
+        });
         l.add("☁  المزامنة والتحكم عن بعد (GitHub):  " + onOff(RemoteSync.configured(prefs)));
         a.add(this::showSyncSettings);
         l.add("🔕  احترام وضع الصامت والاهتزاز وعدم الإزعاج (للجوالات):  " + onOff(prefs.getBoolean("respect_ringer", true)));
@@ -4586,6 +4602,39 @@ public class MainActivity extends Activity {
         return sb;
     }
 
+    /** Every digit gets the same cell width, so counting seconds never makes the text jiggle. */
+    private static CharSequence tabDigits(CharSequence src) {
+        android.text.SpannableString sp = new android.text.SpannableString(src);
+        for (int i = 0; i < sp.length(); i++) {
+            char c = sp.charAt(i);
+            if (c >= '0' && c <= '9') {
+                sp.setSpan(new android.text.style.ReplacementSpan() {
+                    @Override public int getSize(android.graphics.Paint p, CharSequence t, int a, int b,
+                                                 android.graphics.Paint.FontMetricsInt fm) {
+                        if (fm != null) {
+                            android.graphics.Paint.FontMetricsInt pf = p.getFontMetricsInt();
+                            fm.ascent = pf.ascent; fm.descent = pf.descent; fm.top = pf.top; fm.bottom = pf.bottom;
+                        }
+                        return Math.round(cell(p));
+                    }
+
+                    @Override public void draw(Canvas cv, CharSequence t, int a, int b, float x, int top, int y, int bt,
+                                               android.graphics.Paint p) {
+                        float w = p.measureText(t, a, b);
+                        cv.drawText(t, a, b, x + (cell(p) - w) / 2f, y, p);
+                    }
+
+                    private float cell(android.graphics.Paint p) {
+                        float m = 0f;
+                        for (char d = '0'; d <= '9'; d++) m = Math.max(m, p.measureText(String.valueOf(d)));
+                        return m;
+                    }
+                }, i, i + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+        }
+        return sp;
+    }
+
     private int cdRowW() {
         return csc(230f * Math.max(40, Math.min(300, prefs.getInt("cd_w", 100))) / 100f);
     }
@@ -4804,7 +4853,7 @@ public class MainActivity extends Activity {
             rebuilt = true;
         }
         for (int i = 0; i < rows.size() && i < cdVal.size(); i++) {
-            cdVal.get(i).setText(rows.get(i)[2]);
+            cdVal.get(i).setText(tabDigits(rows.get(i)[2]));
         }
         cdCard.setVisibility(View.VISIBLE);
         if (rebuilt) {
@@ -5117,6 +5166,47 @@ public class MainActivity extends Activity {
         preStyle();
     }
 
+    private boolean preInWm;
+
+    private WindowManager.LayoutParams preWmLp() {
+        int d = preDiameter();
+        int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
+        int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(d, d,
+                Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                android.graphics.PixelFormat.TRANSLUCENT);
+        lp.gravity = (corner < 2 ? Gravity.TOP : Gravity.BOTTOM) | (corner % 2 == 0 ? Gravity.LEFT : Gravity.RIGHT);
+        lp.x = mg;
+        lp.y = mg;
+        return lp;
+    }
+
+    /** With the "draw over other apps" permission the badge lives in its own window, so it shows above other apps too. */
+    private void preAttach() {
+        if (preBadge == null) return;
+        boolean want = WakeUtil.canOverlay(this);
+        try {
+            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            if (want && !preInWm) {
+                if (preBadge.getParent() instanceof ViewGroup) ((ViewGroup) preBadge.getParent()).removeView(preBadge);
+                wm.addView(preBadge, preWmLp());
+                preInWm = true;
+                AppLog.info("PRE", "badge moved to an overlay window");
+            } else if (!want && preInWm) {
+                wm.removeView(preBadge);
+                preInWm = false;
+                root.addView(preBadge, new FrameLayout.LayoutParams(10, 10));
+            }
+        } catch (Exception e) {
+            AppLog.error("PRE", "overlay attach failed", e);
+            if (preInWm) preInWm = false;
+            if (preBadge.getParent() == null) root.addView(preBadge, new FrameLayout.LayoutParams(10, 10));
+        }
+    }
+
     private int preDiameter() {
         return Math.round(unit() * 78f * Math.max(50, Math.min(250, prefs.getInt("pre_size", 100))) / 100f);
     }
@@ -5130,6 +5220,14 @@ public class MainActivity extends Activity {
         g.setColor(argb(al * 255 / 100, 0x0B, 0x1E, 0x17));
         g.setStroke(Math.max(1, Math.round(d / 40f)), argb(Math.min(255, al * 255 / 100 + 40), 0xF4, 0xC9, 0x5D));
         preBadge.setBackground(g);
+        preAttach();
+        if (preInWm) {
+            try {
+                ((WindowManager) getSystemService(WINDOW_SERVICE)).updateViewLayout(preBadge, preWmLp());
+            } catch (Exception ignored) {
+            }
+            return;
+        }
         int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
         int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(d, d,
@@ -5140,6 +5238,7 @@ public class MainActivity extends Activity {
 
     private void preUpdate() {
         if (preBadge == null) return;
+        if (WakeUtil.canOverlay(this) != preInWm) preStyle();
         long now = System.currentTimeMillis();
         boolean demo = preDemoStart > 0 && now - preDemoStart < 20_000L;
         boolean ok = (prefs.getBoolean("pre_on", true) || demo) && !adhanRunning && !quranRunning && annView == null;
@@ -5182,7 +5281,7 @@ public class MainActivity extends Activity {
             sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * 0.12f)), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             sb.setSpan(new android.text.style.ForegroundColorSpan(0xCCFFFFFF), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             int a2 = sb.length();
-            sb.append(tm);
+            sb.append(tabDigits(tm));
             sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (prefs.getBoolean("pre_secs", true) ? 0.21f : 0.19f))),
                     a2, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             preBadge.setText(sb);
@@ -5193,13 +5292,30 @@ public class MainActivity extends Activity {
             preStyle();
             preBadge.setAlpha(0f);
             preBadge.setVisibility(View.VISIBLE);
-            preBadge.bringToFront();
+            if (!preInWm) preBadge.bringToFront();
             preBadge.animate().alpha(1f).setDuration(500L).setListener(null).start();
         } else if (!show && preShown) {
             preShown = false;
             preBadge.animate().alpha(0f).setDuration(400L).withEndAction(() -> {
                 if (!preShown) preBadge.setVisibility(View.GONE);
             }).start();
+        }
+    }
+
+    private void askOverlayPermission() {
+        if (WakeUtil.canOverlay(this)) {
+            toast("الصلاحية مفعّلة");
+            showAdhanSettings();
+            return;
+        }
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:" + getPackageName())));
+            toast("فعّل «السماح بالظهور فوق التطبيقات» لـ Mawaqit Home ثم ارجع");
+        } catch (Exception e) {
+            showInfo("تفعيل الصلاحية بالأمر", "جهازك لا يعرض شاشة هذه الصلاحية. فعّلها من الكمبيوتر بهذا الأمر:",
+                    "adb shell appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow", null, null,
+                    null, null, null, null);
         }
     }
 
@@ -5979,8 +6095,37 @@ public class MainActivity extends Activity {
     private static final String DUA_TEXT = "اللَّهُمَّ رَبَّ هَذِهِ الدَّعْوَةِ التَّامَّةِ، وَالصَّلَاةِ الْقَائِمَةِ،\n"
             + "آتِ مُحَمَّدًا الْوَسِيلَةَ وَالْفَضِيلَةَ،\nوَابْعَثْهُ مَقَامًا مَحْمُودًا الَّذِي وَعَدْتَهُ";
 
+    private long guardUntil;
+
+    /**
+     * After a reboot other launchers (Fire TV / Google TV home) may open after us. For a few minutes we check that
+     * Mawaqit Home is the app in front and bring it back if not, so the prayer times are what the screen shows.
+     */
+    private final Runnable guardTick = new Runnable() {
+        @Override public void run() {
+            if (destroyed || System.currentTimeMillis() > guardUntil || !prefs.getBoolean("boot_guard", true)) return;
+            if (!resumed && !adhanRunning && !quranRunning) {
+                AppLog.info("GUARD", "not in front after boot, bringing the launcher back");
+                try {
+                    Intent i = new Intent(MainActivity.this, MainActivity.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    startActivity(i);
+                } catch (Exception e) {
+                    AppLog.error("GUARD", "failed", e);
+                }
+            }
+            handler.postDelayed(this, 12_000L);
+        }
+    };
+
     private void handleAdhanIntent(Intent in) {
         if (in == null) return;
+        if (in.getBooleanExtra("boot_guard", false)) {
+            in.removeExtra("boot_guard");
+            guardUntil = System.currentTimeMillis() + 4 * 60_000L;
+            handler.removeCallbacks(guardTick);
+            handler.postDelayed(guardTick, 12_000L);
+        }
         long qid = in.getLongExtra("quran", -1L);
         if (qid >= 0) {
             long qat = in.getLongExtra("quran_at", 0L);
@@ -6047,6 +6192,7 @@ public class MainActivity extends Activity {
         }
         if (railOpen) closeRail(false);
         if (sizeH > 0) applyStage(0, false);
+        hideStripNow();
         pauseNativeVideo();
         String nm = idx >= 0 && idx < 5 ? PRAYER_NAMES[idx] : "";
         if (idx == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) nm = "الجمعة";
@@ -6113,6 +6259,7 @@ public class MainActivity extends Activity {
         }
         if (railOpen) closeRail(false);
         if (sizeH > 0) applyStage(0, false);
+        hideStripNow();
         pauseNativeVideo();
         String pick = "";
         if (idx >= 0 && idx <= 4) {
@@ -6317,6 +6464,7 @@ public class MainActivity extends Activity {
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         adhanRunning = false;
         AppLog.info("ADHAN", "finished; returning to previous app: " + adhanReturn);
+        showStripNow();
         resumeNativeVideo();
         if (adhanReturn) moveTaskToBack(true);
         syncAfterIdle();
@@ -6508,6 +6656,9 @@ public class MainActivity extends Activity {
             WakeScheduler.scheduleAdhan(this);
             showAdhanSettings();
         });
+        l.add("🪟  الظهور فوق التطبيقات (الدائرة فوق اليوتيوب + تشغيل الأذان من الخلفية):  "
+                + (WakeUtil.canOverlay(this) ? "مفعّل ✓" : "غير مفعّل ✗"));
+        a.add(this::askOverlayPermission);
         l.add("🔔  تنبيه قبل الصلاة (دائرة صغيرة + إعلان قبل الأذان):  " + onOff(prefs.getBoolean("pre_on", true)));
         a.add(this::showPreSettings);
         l.add("📿  الصلوات المفعّلة:  " + maskNames(prefs.getInt("adhan_mask", 31)));
@@ -8705,15 +8856,29 @@ public class MainActivity extends Activity {
     // --------------------------------------------------------- Screen saver
 
     private boolean stripHidden;
+
+    /** Phones: the strip is lifted off the bottom edge (gesture bar / rounded corners). TVs: no lift. */
+    private int stripLift() {
+        return dp(prefs.getInt("strip_lift", isTvDevice(this) ? 0 : 18));
+    }
+
+    /** Slides the strip away at once (used when the adhan sound starts). */
+    private void hideStripNow() {
+        if (strip == null || stripH <= 0) return;
+        handler.removeCallbacks(stripHideTask);
+        stripHidden = true;
+        strip.animate().translationY(stripH + stripLift() + dp(6)).setDuration(ms(400L)).start();
+    }
+
     private final Runnable stripHideTask = () -> {
-        if (prefs.getInt("strip_hide", 0) > 0 && (topDlg != null || openDialogs > 0 || quranRunning || adhanRunning
+        if (prefs.getInt("strip_hide", 0) > 0 && (topDlg != null || openDialogs > 0 || quranRunning
                 || updBusy)) {
             scheduleStripHide();                  // something is happening inside the app: keep the strip visible
             return;
         }
         if (stage == 0 && prefs.getInt("strip_hide", 0) > 0 && !railOpen && !moveMode && !wMove && strip != null) {
             stripHidden = true;
-            strip.animate().translationY(stripH + dp(6)).setDuration(ms(500L)).start();
+            strip.animate().translationY(stripH + stripLift() + dp(6)).setDuration(ms(500L)).start();
         }
     };
 
@@ -8747,7 +8912,7 @@ public class MainActivity extends Activity {
         if (ui) applyRootBg(); else root.setBackgroundColor(Color.BLACK);   // no green edges while pixel-shifting
 
         stripHidden = false;
-        strip.animate().translationY(ui ? 0f : stripH + dp(6)).setDuration(dur)
+        strip.animate().translationY(ui ? 0f : stripH + stripLift() + dp(6)).setDuration(dur)
                 .setInterpolator(ip).start();
         if (ui) scheduleStripHide(); else handler.removeCallbacks(stripHideTask);
         applyWeatherVis(animate);

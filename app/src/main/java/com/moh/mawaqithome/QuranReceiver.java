@@ -11,13 +11,14 @@ public class QuranReceiver extends BroadcastReceiver {
         AppLog.init(ctx);
         long id = intent.getLongExtra("id", -1L);
         AppLog.info("QURAN", "alarm fired for item " + id);
+        WakeUtil.wakeScreen(ctx, 2 * 60_000L);
         try {
             Intent i = new Intent(ctx, MainActivity.class);
             i.putExtra("quran", id);
             i.putExtra("quran_at", System.currentTimeMillis());
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
                     | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            ctx.startActivity(i);
+            WakeUtil.bringToFront(ctx, i, "قراءة القرآن");
         } catch (Exception e) {
             AppLog.error("QURAN", "start failed", e);
         } finally {

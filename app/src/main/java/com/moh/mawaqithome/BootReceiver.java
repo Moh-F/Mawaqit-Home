@@ -22,6 +22,7 @@ public class BootReceiver extends BroadcastReceiver {
             Intent i = new Intent(ctx, MainActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (replaced) i.putExtra("postupdate", true);
+            else i.putExtra("boot_guard", true);
             ctx.startActivity(i);
         } catch (Exception e) {
             AppLog.error("BOOT", "start failed", e);

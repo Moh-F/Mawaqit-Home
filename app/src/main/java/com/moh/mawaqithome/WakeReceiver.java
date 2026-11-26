@@ -19,6 +19,7 @@ public class WakeReceiver extends BroadcastReceiver {
         try {
             PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
             if (pm != null && !pm.isInteractive()) {
+                WakeUtil.wakeScreen(ctx, 4 * 60_000L);
                 Intent i = new Intent(ctx, MainActivity.class);
                 i.putExtra("wake", true);
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
