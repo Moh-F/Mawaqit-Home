@@ -5236,7 +5236,6 @@ public class MainActivity extends Activity {
 
     private WindowManager.LayoutParams preWmLp() {
         int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
-        int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(preW(), preH(),
                 Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                         : WindowManager.LayoutParams.TYPE_PHONE,
@@ -5244,8 +5243,8 @@ public class MainActivity extends Activity {
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 android.graphics.PixelFormat.TRANSLUCENT);
         lp.gravity = (corner < 2 ? Gravity.TOP : Gravity.BOTTOM) | (corner % 2 == 0 ? Gravity.LEFT : Gravity.RIGHT);
-        lp.x = mg;
-        lp.y = mg;
+        lp.x = preMX();
+        lp.y = preMY();
         return lp;
     }
 
@@ -5274,9 +5273,21 @@ public class MainActivity extends Activity {
 
     private int preShape() { return Math.max(0, Math.min(2, prefs.getInt("pre_shape", 0))); }   // 0 pill, 1 rectangle, 2 circle
 
-    private int preW() { return preShape() == 2 ? preDiameter() : Math.round(preDiameter() * 1.8f); }
+    private boolean preOneLine() { return preShape() != 2 && prefs.getInt("pre_lines", 0) == 1; }
 
-    private int preH() { return preShape() == 2 ? preDiameter() : Math.round(preDiameter() * 0.78f); }
+    private int preW() {
+        if (preShape() == 2) return preDiameter();
+        return Math.round(preDiameter() * (preOneLine() ? 2.5f : 1.8f) * wp("pre_w_pct"));
+    }
+
+    private int preH() {
+        if (preShape() == 2) return preDiameter();
+        return Math.round(preDiameter() * (preOneLine() ? 0.5f : 0.78f) * wp("pre_h_pct"));
+    }
+
+    private int preMX() { return fine("pre_f_mx", Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)))); }
+
+    private int preMY() { return fine("pre_f_my", Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)))); }
 
     private int preDiameter() {
         return Math.round(unit() * 78f * Math.max(50, Math.min(250, prefs.getInt("pre_size", 100))) / 100f);
@@ -5290,11 +5301,19 @@ public class MainActivity extends Activity {
         if (preShape() == 2) g.setShape(GradientDrawable.OVAL);
         else {
             g.setShape(GradientDrawable.RECTANGLE);
-            g.setCornerRadius(preShape() == 0 ? preH() / 2f : preH() * 0.2f);
+            g.setCornerRadius(prefs.contains("pre_radius") ? dp(prefs.getInt("pre_radius", 20))
+                    : preShape() == 0 ? preH() / 2f : preH() * 0.2f);
         }
-        g.setColor(argb(al * 255 / 100, 0x0B, 0x1E, 0x17));
-        g.setStroke(Math.max(1, Math.round(d / 40f)), argb(Math.min(255, al * 255 / 100 + 40), 0xF4, 0xC9, 0x5D));
+        int bgi = prefs.getInt("pre_bg", 0);
+        int bgc = bgi > 0 && bgi < CD_BGS.length ? CD_BGS[bgi] : 0xFF0B1E17;
+        g.setColor(((al * 255 / 100) << 24) | (bgc & 0xFFFFFF));
+        int bw = prefs.contains("pre_border") ? Math.round(prefs.getInt("pre_border", 1) * getResources().getDisplayMetrics().density / 2f)
+                : Math.round(d / 40f);
+        if (bw > 0 || !prefs.contains("pre_border"))
+            g.setStroke(Math.max(1, bw), withAlpha(wcol("pre_border_col", 0xFFF4C95D), Math.min(255, al * 255 / 100 + 40)));
         preBadge.setBackground(g);
+        preBadge.setPadding(fine("pre_f_pl", 0), fine("pre_f_pt", 0), fine("pre_f_pr", 0), fine("pre_f_pb", 0));
+        preBadge.setLineSpacing(fine("pre_f_gap", 0), 1f);
         preAttach();
         if (preInWm) {
             try {
@@ -5304,10 +5323,9 @@ public class MainActivity extends Activity {
             return;
         }
         int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
-        int mg = Math.round(unit() * Math.max(0, prefs.getInt("pre_mg", 14)));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(preW(), preH(),
                 (corner < 2 ? Gravity.TOP : Gravity.BOTTOM) | (corner % 2 == 0 ? Gravity.LEFT : Gravity.RIGHT));
-        lp.setMargins(mg, mg, mg, mg);
+        lp.setMargins(preMX(), preMY(), preMX(), preMY());
         preBadge.setLayoutParams(lp);
     }
 
@@ -5346,23 +5364,52 @@ public class MainActivity extends Activity {
             if (bi == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) nm = "الجمعة";
             android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
             float d = preDiameter();
-            boolean circ = preShape() == 2;
+            boolean circ = preShape() == 2, one = preOneLine();
+            boolean showAfter = prefs.getBoolean("pre_after_show", true);
+            int cName = wcol("pre_name_col", 0xFFF4C95D), cAfter = wcol("pre_after_col", 0xCCFFFFFF), cTime = wcol("pre_time_col", Color.WHITE);
             int a0 = sb.length();
             sb.append(nm);
-            sb.setSpan(new android.text.style.ForegroundColorSpan(0xFFF4C95D), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (circ ? 0.20f : 0.19f))), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.append(circ ? "\n" : "  ");
-            int a1 = sb.length();
-            sb.append(circ ? "بعد\n" : "بعد");
-            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (circ ? 0.12f : 0.15f))), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            sb.setSpan(new android.text.style.ForegroundColorSpan(0xCCFFFFFF), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            if (!circ) sb.append("\n");
+            sb.setSpan(new android.text.style.ForegroundColorSpan(cName), a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (one ? 0.3f : circ ? 0.20f : 0.19f) * wp("pre_name_pct"))),
+                    a0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            if (one || (!circ && showAfter)) {
+                int g0 = sb.length();
+                sb.append(" ");
+                final int gw = Math.max(0, fine("pre_f_wgap", Math.round(unit() * 6f)));
+                sb.setSpan(new android.text.style.ReplacementSpan() {
+                    @Override public int getSize(android.graphics.Paint p, CharSequence t, int a, int b,
+                                                 android.graphics.Paint.FontMetricsInt fm) { return gw; }
+                    @Override public void draw(Canvas c, CharSequence t, int a, int b, float x, int top, int y, int bt,
+                                               android.graphics.Paint p) { }
+                }, g0, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            if (circ) sb.append("\n");
+            if (showAfter) {
+                int a1 = sb.length();
+                sb.append(circ ? "بعد\n" : "بعد");
+                sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (one ? 0.24f : circ ? 0.12f : 0.15f) * wp("pre_after_pct"))),
+                        a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                sb.setSpan(new android.text.style.ForegroundColorSpan(cAfter), a1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                if (one) {
+                    int g1 = sb.length();
+                    sb.append(" ");
+                    final int gw2 = Math.max(0, fine("pre_f_wgap", Math.round(unit() * 6f)));
+                    sb.setSpan(new android.text.style.ReplacementSpan() {
+                        @Override public int getSize(android.graphics.Paint p, CharSequence t, int a, int b,
+                                                     android.graphics.Paint.FontMetricsInt fm) { return gw2; }
+                        @Override public void draw(Canvas c, CharSequence t, int a, int b, float x, int top, int y, int bt,
+                                                   android.graphics.Paint p) { }
+                    }, g1, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+            if (!circ && !one) sb.append("\n");
             int a2 = sb.length();
             sb.append("\u202A").append(tabDigits(tm)).append("\u202C");
-            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (prefs.getBoolean("pre_secs", true) ? 0.21f : 0.19f))),
-                    a2, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.AbsoluteSizeSpan(Math.round(d * (one ? 0.3f : prefs.getBoolean("pre_secs", true) ? 0.21f : 0.19f)
+                    * wp("pre_time_pct"))), a2, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.ForegroundColorSpan(cTime), a2, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            preBadge.setTypeface(prefs.getBoolean("pre_time_bold", true) ? tf(true) : tf(false));
             preBadge.setText(sb);
-            preBadge.setLineSpacing(0f, 0.95f);
         }
         if (show && !preShown) {
             preShown = true;
@@ -5396,7 +5443,63 @@ public class MainActivity extends Activity {
         }
     }
 
+    private final Runnable preLive = () -> {
+        preStyle();
+        preDemoStart = System.currentTimeMillis();
+        preUpdate();
+    };
+
+    private void showPreStyle() {
+        styleLive = preLive;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showPreStyle;
+        l.add("— الشكل والتخطيط —");
+        a.add(back);
+        l.add("☰  عدد الأسطر:  " + (prefs.getInt("pre_lines", 0) == 1 ? "سطر واحد (الاسم + العدّاد)" : "سطران (الاسم / العدّاد)"));
+        a.add(() -> choice("عدد الأسطر (للكبسولة والمستطيل)", new String[]{"سطران: الاسم في سطر والعدّاد في سطر", "سطر واحد: الاسم والعدّاد معاً"},
+                prefs.getInt("pre_lines", 0), i -> {
+                    prefs.edit().putInt("pre_lines", i).apply();
+                    runStyleLive();
+                    back.run();
+                }, back));
+        cdNum(l, a, "العرض", "pre_w_pct", 100, 40, 300, "%", back, false);
+        cdNum(l, a, "الارتفاع", "pre_h_pct", 100, 40, 300, "%", back, false);
+        cdNum(l, a, "استدارة الزوايا (للمستطيل)", "pre_radius", 8, 0, 80, "", back, true);
+        l.add("— الاسم (الظهر…) —");
+        a.add(back);
+        cdNum(l, a, "حجم خط الاسم", "pre_name_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون الاسم", "pre_name_col", 0, WX_COL_NAMES, back);
+        l.add("— كلمة «بعد» —");
+        a.add(back);
+        cdToggle(l, a, "إظهار كلمة «بعد»", "pre_after_show", true, back);
+        cdNum(l, a, "حجم خط «بعد»", "pre_after_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون «بعد»", "pre_after_col", 0, WX_COL_NAMES, back);
+        l.add("— العدّاد —");
+        a.add(back);
+        cdNum(l, a, "حجم خط العدّاد", "pre_time_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون العدّاد", "pre_time_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "العدّاد والاسم بخط عريض", "pre_time_bold", true, back);
+        l.add("— الإطار والخلفية —");
+        a.add(back);
+        cdColor(l, a, "لون الخلفية", "pre_bg", 0, WX_BG_NAMES, back);
+        cdNum(l, a, "سماكة الإطار (0 = بدون)", "pre_border", 2, 0, 20, "", back, true);
+        cdColor(l, a, "لون الإطار", "pre_border_col", 0, WX_COL_NAMES, back);
+        l.add("— المسافات والهوامش —");
+        a.add(back);
+        cdNum(l, a, "داخلي: أعلى", "pre_f_pt", 0, -20, 100, "", back, true);
+        cdNum(l, a, "داخلي: أسفل", "pre_f_pb", 0, -20, 100, "", back, true);
+        cdNum(l, a, "داخلي: يسار", "pre_f_pl", 0, -20, 100, "", back, true);
+        cdNum(l, a, "داخلي: يمين", "pre_f_pr", 0, -20, 100, "", back, true);
+        cdNum(l, a, "بين سطر الاسم وسطر العدّاد", "pre_f_gap", 0, -30, 100, "", back, true);
+        cdNum(l, a, "بين الاسم و«بعد» والعدّاد (سطر واحد)", "pre_f_wgap", fineSteps(Math.round(unit() * 6f)), 0, 100, "", back, true);
+        cdNum(l, a, "خارجي: البعد الأفقي عن الحافة", "pre_f_mx", fineSteps(Math.round(unit() * 14f)), 0, 400, "", back, true);
+        cdNum(l, a, "خارجي: البعد الرأسي عن الحافة", "pre_f_my", fineSteps(Math.round(unit() * 14f)), 0, 400, "", back, true);
+        menu("🎨 مظهر تنبيه الصلاة", l, a, this::showPreSettings);
+    }
+
     private void showPreSettings() {
+        styleLive = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showPreSettings;
@@ -5426,6 +5529,8 @@ public class MainActivity extends Activity {
                     live.run();
                     showPreSettings();
                 }, back));
+        l.add("🎨  مظهر التنبيه بالتفصيل (ألوان، أحجام، سطر/سطرين، هوامش…)");
+        a.add(this::showPreStyle);
         l.add("📍  الزاوية:  " + new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"}[Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)))]);
         a.add(() -> choice("زاوية الدائرة", new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"},
                 prefs.getInt("pre_corner", 1), i -> {
