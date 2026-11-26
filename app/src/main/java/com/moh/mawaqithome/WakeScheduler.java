@@ -105,6 +105,13 @@ public final class WakeScheduler {
         return best;
     }
 
+    /** How long before the prayer minute the adhan alarm fires: the larger of "pause media" and "announce" seconds. */
+    public static long leadMs(SharedPreferences p) {
+        int pause = Math.max(0, Math.min(9, p.getInt("adhan_pause_secs", 6)));
+        int ann = Math.max(0, Math.min(10, p.getInt("adhan_pre_secs", 3)));
+        return Math.max(pause, ann) * 1000L;
+    }
+
     /** One exact alarm at the next selected prayer minute (adhan). Re-armed after each firing. */
     public static void scheduleAdhan(Context ctx) {
         try {
@@ -119,7 +126,7 @@ public final class WakeScheduler {
             if (t == null) return;
             int mask = p.getInt("adhan_mask", 31);
             long now = System.currentTimeMillis();
-            long lead = Math.max(0, Math.min(10, p.getInt("adhan_pre_secs", 3))) * 1000L;   // announcement before the adhan
+            long lead = leadMs(p);   // media pause + announcement before the adhan
             long best = Long.MAX_VALUE;
             int bi = -1;
             for (int d = 0; d <= 1; d++) {

@@ -596,6 +596,7 @@ public class MainActivity extends Activity {
         buildWeatherCard();
         buildCdCard();
         buildPreBadge();
+        initTts();
         sync = new RemoteSync(this, prefs, syncHost);
         if (RemoteSync.configured(prefs)) sync.start();
         buildStrip();
@@ -696,6 +697,9 @@ public class MainActivity extends Activity {
         }
         if (root.findFocus() == null) focusFirst();
         hideSystemUi();
+        if (prefs.getBoolean("boot_guard", true) && !AdbShell.blocked(this)
+                && System.currentTimeMillis() - prefs.getLong("home_try_at", 0L) > 6L * 3600_000L && !isDefaultHome())
+            handler.postDelayed(() -> forceLauncher(false), 6000L);
         long ts = prefs.getLong("prayers_ts", 0L);
         if (System.currentTimeMillis() - ts > 30L * 60 * 1000) {
             handler.removeCallbacks(prayerTask);
@@ -730,6 +734,10 @@ public class MainActivity extends Activity {
         AppLog.info("APP", "destroyed");
         if (quranPlayer != null) quranPlayer.stop();
         if (sync != null) sync.stop();
+        try {
+            if (tts != null) tts.shutdown();
+        } catch (Exception ignored) {
+        }
         if (preInWm) {
             try {
                 ((WindowManager) getSystemService(WINDOW_SERVICE)).removeView(preBadge);
@@ -2305,7 +2313,7 @@ public class MainActivity extends Activity {
         String cr = prefs.getString("bg_credit", "");
         l.add("©  المصدر الحالي:  " + (cr.isEmpty() ? "—" : cr));
         a.add(this::showBgSettings);
-        menu("الخلفية من الإنترنت (صور / فيديو)", l, a, this::showLauncherSettings);
+        menu("الخلفية من الإنترنت (صور / فيديو)", l, a, this::backToGroup);
     }
 
     private void showAdminDialog() {
@@ -4113,61 +4121,173 @@ public class MainActivity extends Activity {
     }
 
     private void showLauncherSettings() {
+        lastGroup = null;
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         l.add("📊  لوحة الحالة");
         a.add(this::showStatus);
         l.add("🔗  رابط الصفحة");
         a.add(this::promptUrl);
-        l.add("🕌  الأذان وصوت المؤذن:  " + onOff(prefs.getBoolean("adhan_on", false)));
+        l.add("🕌  الصلاة والأذان والقرآن والعدّادات");
+        a.add(this::showGroupPrayer);
+        l.add("🖥  الشاشة والمظهر (الطقس، الشريط، الخلفية، الخط…)");
+        a.add(this::showGroupScreen);
+        l.add("⚙  النظام والجهاز (اللانشر الرئيسي، الإقلاع، ADB، التحديثات)" + (pendingInfo != null ? "  ⬆" : ""));
+        a.add(this::showGroupSystem);
+        l.add("☁  المزامنة والتحكم عن بعد والنسخ الاحتياطي");
+        a.add(this::showGroupSync);
+        l.add("🛠  الصيانة والمعلومات (السجل، إعادة الضبط، حول)");
+        a.add(this::showGroupMaint);
+        menu("إعدادات Mawaqit Home", l, a, null);
+    }
+
+    // ---- make this app the real Home screen
+
+    private boolean isDefaultHome() {
+        try {
+            Intent h = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+            android.content.pm.ResolveInfo r = getPackageManager().resolveActivity(h, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            return r != null && r.activityInfo != null && getPackageName().equals(r.activityInfo.packageName);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Makes Mawaqit Home the default Home app: through self-ADB when it works, else by opening the system chooser. */
+    private void forceLauncher(final boolean manual) {
+        if (isDefaultHome()) {
+            if (manual) toast("اللانشر هو الشاشة الرئيسية ✓");
+            return;
+        }
+        prefs.edit().putLong("home_try_at", System.currentTimeMillis()).apply();
+        final String comp = getPackageName() + "/" + MainActivity.class.getName();
+        if (!AdbShell.blocked(this)) {
+            AppLog.info("HOME", "setting the default home app through ADB");
+            AdbShell.run(this, "cmd package set-home-activity " + comp + "; cmd role add-role-holder android.app.role.HOME "
+                    + getPackageName() + " 0", (ok, out) -> {
+                boolean now = isDefaultHome();
+                AppLog.info("HOME", "result: " + now + " " + out);
+                if (manual) toast(now ? "تم: اللانشر هو الشاشة الرئيسية ✓" : "لم ينجح بالأمر — اختر Mawaqit Home من النافذة التالية");
+                if (!now && manual) openHomeChooser();
+            });
+            return;
+        }
+        if (manual) openHomeChooser();
+        else AppLog.info("HOME", "not the default home app and ADB is not available here");
+    }
+
+    private void openHomeChooser() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_HOME_SETTINGS));
+            return;
+        } catch (Exception ignored) {
+        }
+        try {
+            Intent h = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(Intent.createChooser(h, "اختر Mawaqit Home واضغط «دائماً»"));
+            return;
+        } catch (Exception ignored) {
+        }
+        showInfo("اجعل اللانشر الرئيسي", "جهازك لا يعرض شاشة اختيار الشاشة الرئيسية. من الكمبيوتر بأمر ADB:",
+                "adb shell cmd package set-home-activity " + getPackageName() + "/" + MainActivity.class.getName(),
+                "حسناً", null, null, null, null, null);
+    }
+
+    // ---- settings: grouped menus
+
+    private Runnable lastGroup;
+
+    private void backToGroup() {
+        if (lastGroup != null) lastGroup.run();
+        else showLauncherSettings();
+    }
+
+    private void showGroupPrayer() {
+        lastGroup = this::showGroupPrayer;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("🕌  الأذان وصوت المؤذن (وتنبيه قبل الصلاة):  " + onOff(prefs.getBoolean("adhan_on", false)));
         a.add(this::showAdhanSettings);
-        l.add("⏳  العدّادات (رمضان، العيد، الفجر والمغرب، أحداثي):  " + onOff(prefs.getBoolean("cd_show", false)));
-        a.add(this::showCountdownSettings);
-        l.add("⬆  رفع الشريط السفلي عن الحافة (للجوال):  " + prefs.getInt("strip_lift", isTvDevice(this) ? 0 : 18));
-        a.add(() -> numberDialog("رفع الشريط السفلي عن حافة الشاشة", "strip_lift", isTvDevice(this) ? 0 : 18, 0, 120, "",
-                null, () -> { if (sizeW > 0) onSized(sizeW, sizeH); }, this::showLauncherSettings, this::showLauncherSettings));
-        l.add("🛡  إعادة اللانشر للواجهة بعد تشغيل الجهاز:  " + onOff(prefs.getBoolean("boot_guard", true)));
-        a.add(() -> {
-            prefs.edit().putBoolean("boot_guard", !prefs.getBoolean("boot_guard", true)).apply();
-            showLauncherSettings();
-        });
-        l.add("☁  المزامنة والتحكم عن بعد (GitHub):  " + onOff(RemoteSync.configured(prefs)));
-        a.add(this::showSyncSettings);
-        l.add("🔕  احترام وضع الصامت والاهتزاز وعدم الإزعاج (للجوالات):  " + onOff(prefs.getBoolean("respect_ringer", true)));
-        a.add(() -> {
-            prefs.edit().putBoolean("respect_ringer", !prefs.getBoolean("respect_ringer", true)).apply();
-            showLauncherSettings();
-        });
         l.add("📖  القرآن الكريم (جدولة القراءة آية بآية):  "
                 + onOff(prefs.getBoolean("quran_on", true) && QuranSched.items(prefs).length() > 0));
         a.add(this::showQuranSettings);
-        l.add("🌙  حماية الشاشة (الاختفاء والتعتيم والنوم)");
-        a.add(this::showSaverSettings);
-        l.add("☰  الشريط والتصنيفات والقائمة");
-        a.add(this::showStripSettings);
+        l.add("⏳  العدّادات (رمضان، العيد، الفجر والمغرب، أحداثي):  " + onOff(prefs.getBoolean("cd_show", false)));
+        a.add(this::showCountdownSettings);
+        l.add("🕒  الوقت والتاريخ والمنطقة الزمنية");
+        a.add(this::showTimeSettings);
+        l.add("🔕  احترام وضع الصامت والاهتزاز وعدم الإزعاج (للجوالات):  " + onOff(prefs.getBoolean("respect_ringer", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("respect_ringer", !prefs.getBoolean("respect_ringer", true)).apply();
+            showGroupPrayer();
+        });
+        menu("🕌 الصلاة والأذان والقرآن", l, a, this::showLauncherSettings);
+    }
+
+    private void showGroupScreen() {
+        lastGroup = this::showGroupScreen;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
         l.add("🌦  بطاقة الطقس");
         a.add(this::showWeatherSettings);
         l.add("🎯  تحريك عناصر صفحة المواقيت");
         a.add(this::showPageElements);
-        l.add("🕒  الوقت والتاريخ والمنطقة الزمنية");
-        a.add(this::showTimeSettings);
-        l.add("🎛  الصوت والحركة والمظهر");
-        a.add(this::showMotionSettings);
-        l.add("🔄  التحديثات" + (pendingInfo != null ? "  ⬆ متاح" : ""));
-        a.add(this::showUpdateSettings);
-        l.add("🚀  التشغيل عند الإقلاع:  " + onOff(prefs.getBoolean("boot", true)));
-        a.add(() -> {
-            prefs.edit().putBoolean("boot", !prefs.getBoolean("boot", true)).apply();
-            showLauncherSettings();
-        });
-        l.add("💾  النسخ الاحتياطي وملفات التعريف (رمضان وغيره)");
-        a.add(this::showBackupMenu);
-        l.add("🔒  مدير الجهاز (نوم الجهاز):  " + (adminActive() ? "مفعّل" : "غير مفعّل"));
-        a.add(this::showAdminDialog);
+        l.add("☰  الشريط والتصنيفات والقائمة");
+        a.add(this::showStripSettings);
+        l.add("⬆  رفع الشريط السفلي عن الحافة (للجوال):  " + prefs.getInt("strip_lift", isTvDevice(this) ? 0 : 18));
+        a.add(() -> numberDialog("رفع الشريط السفلي عن حافة الشاشة", "strip_lift", isTvDevice(this) ? 0 : 18, 0, 120, "",
+                null, () -> { if (sizeW > 0) onSized(sizeW, sizeH); }, this::showGroupScreen, this::showGroupScreen));
         l.add("🖼  صور الخلفية من الإنترنت:  " + (bgEnabled() ? "تعمل" : "متوقفة"));
         a.add(this::showBgSettings);
+        l.add("🌙  حماية الشاشة (الاختفاء والتعتيم والنوم)");
+        a.add(this::showSaverSettings);
+        l.add("🎛  الصوت والحركة والخط والمظهر");
+        a.add(this::showMotionSettings);
+        menu("🖥 الشاشة والمظهر", l, a, this::showLauncherSettings);
+    }
+
+    private void showGroupSystem() {
+        lastGroup = this::showGroupSystem;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("🏠  فرض اللانشر كشاشة رئيسية:  " + (isDefaultHome() ? "مفعّل ✓" : "غير مفعّل ✗ — اضغط للتفعيل"));
+        a.add(() -> {
+            forceLauncher(true);
+            handler.postDelayed(this::showGroupSystem, 1500L);
+        });
+        l.add("🚀  تشغيل اللانشر عند الإقلاع:  " + onOff(prefs.getBoolean("boot", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("boot", !prefs.getBoolean("boot", true)).apply();
+            showGroupSystem();
+        });
+        l.add("🛡  إعادته للواجهة بعد الإقلاع وتثبيته رئيسياً:  " + onOff(prefs.getBoolean("boot_guard", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("boot_guard", !prefs.getBoolean("boot_guard", true)).apply();
+            showGroupSystem();
+        });
         l.add("🔌  اتصال ADB الذاتي");
         a.add(this::showAdbDialog);
+        l.add("🔒  مدير الجهاز (نوم الجهاز):  " + (adminActive() ? "مفعّل" : "غير مفعّل"));
+        a.add(this::showAdminDialog);
+        l.add("🔄  التحديثات" + (pendingInfo != null ? "  ⬆ متاح" : ""));
+        a.add(this::showUpdateSettings);
+        menu("⚙ النظام والجهاز", l, a, this::showLauncherSettings);
+    }
+
+    private void showGroupSync() {
+        lastGroup = this::showGroupSync;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        l.add("☁  المزامنة والتحكم عن بعد (GitHub):  " + onOff(RemoteSync.configured(prefs)));
+        a.add(this::showSyncSettings);
+        l.add("💾  النسخ الاحتياطي وملفات التعريف (رمضان وغيره)");
+        a.add(this::showBackupMenu);
+        menu("☁ المزامنة والنسخ الاحتياطي", l, a, this::showLauncherSettings);
+    }
+
+    private void showGroupMaint() {
+        lastGroup = this::showGroupMaint;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
         l.add("📋  سجل الأخطاء ومشاركته");
         a.add(this::showLogDialog);
         l.add("🔁  إعادة تشغيل التطبيق");
@@ -4176,7 +4296,7 @@ public class MainActivity extends Activity {
         a.add(this::showReset);
         l.add("ℹ  حول التطبيق — الإصدار " + Updater.currentName(this));
         a.add(this::showAbout);
-        menu("إعدادات Mawaqit Home", l, a, null);
+        menu("🛠 الصيانة والمعلومات", l, a, this::showLauncherSettings);
     }
 
     private void restartApp() {
@@ -4321,7 +4441,7 @@ public class MainActivity extends Activity {
                     : String.format(Locale.US, "%.0f ث %s", sec, Updater.skewMs > 0 ? "متأخرة" : "متقدمة")));
             a.add(this::showTimeSettings);
         }
-        menu("الوقت والتاريخ", l, a, this::showLauncherSettings);
+        menu("الوقت والتاريخ", l, a, this::backToGroup);
     }
 
     private void applyTz(String id) {
@@ -5056,7 +5176,7 @@ public class MainActivity extends Activity {
             applyCdStyle();
             showCountdownSettings();
         });
-        menu("⏳ العدّادات", l, a, this::showLauncherSettings);
+        menu("⏳ العدّادات", l, a, this::backToGroup);
     }
 
     // --- countdown appearance: small generic helpers
@@ -5232,7 +5352,7 @@ public class MainActivity extends Activity {
         preStyle();
     }
 
-    private boolean preInWm;
+    private boolean preInWm, preOvFailed;
 
     private WindowManager.LayoutParams preWmLp() {
         int corner = Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)));
@@ -5251,7 +5371,7 @@ public class MainActivity extends Activity {
     /** With the "draw over other apps" permission the badge lives in its own window, so it shows above other apps too. */
     private void preAttach() {
         if (preBadge == null) return;
-        boolean want = WakeUtil.canOverlay(this);
+        boolean want = WakeUtil.canOverlay(this) && !preOvFailed;
         try {
             WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
             if (want && !preInWm) {
@@ -5266,7 +5386,8 @@ public class MainActivity extends Activity {
             }
         } catch (Exception e) {
             AppLog.error("PRE", "overlay attach failed", e);
-            if (preInWm) preInWm = false;
+            preOvFailed = true;                                   // do not retry every second
+            preInWm = false;
             if (preBadge.getParent() == null) root.addView(preBadge, new FrameLayout.LayoutParams(10, 10));
         }
     }
@@ -5331,7 +5452,7 @@ public class MainActivity extends Activity {
 
     private void preUpdate() {
         if (preBadge == null) return;
-        if (WakeUtil.canOverlay(this) != preInWm) preStyle();
+        if ((WakeUtil.canOverlay(this) && !preOvFailed) != preInWm) preStyle();
         long now = System.currentTimeMillis();
         boolean demo = preDemoStart > 0 && now - preDemoStart < 20_000L;
         boolean ok = (prefs.getBoolean("pre_on", true) || demo) && !adhanRunning && !quranRunning && annView == null;
@@ -5411,6 +5532,8 @@ public class MainActivity extends Activity {
             preBadge.setTypeface(prefs.getBoolean("pre_time_bold", true) ? tf(true) : tf(false));
             preBadge.setText(sb);
         }
+        if (show != preShown) AppLog.info("PRE", (show ? "badge shown" : "badge hidden") + " (overlay window: " + preInWm
+                + ", prayer " + bi + ", remaining " + (rem / 1000) + " s)");
         if (show && !preShown) {
             preShown = true;
             preStyle();
@@ -5438,7 +5561,7 @@ public class MainActivity extends Activity {
             toast("فعّل «السماح بالظهور فوق التطبيقات» لـ Mawaqit Home ثم ارجع");
         } catch (Exception e) {
             showInfo("تفعيل الصلاحية بالأمر", "جهازك لا يعرض شاشة هذه الصلاحية. فعّلها من الكمبيوتر بهذا الأمر:",
-                    "adb shell appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow", null, null,
+                    "adb shell appops set " + getPackageName() + " SYSTEM_ALERT_WINDOW allow", "حسناً", null,
                     null, null, null, null);
         }
     }
@@ -5531,6 +5654,17 @@ public class MainActivity extends Activity {
                 }, back));
         l.add("🎨  مظهر التنبيه بالتفصيل (ألوان، أحجام، سطر/سطرين، هوامش…)");
         a.add(this::showPreStyle);
+        l.add("⏸  إيقاف الفيديو/الصوت قبل الأذان بـ:  " + (prefs.getInt("adhan_pause_secs", 6) == 0 ? "معطّل" : prefs.getInt("adhan_pause_secs", 6) + " ثوانٍ"));
+        a.add(() -> numberDialog("إيقاف ما يعمل (يوتيوب، موسيقى…) قبل الأذان بكم ثانية (0 = لا يُوقف)", "adhan_pause_secs", 6, 0, 9, " ث",
+                "معطّل", null, () -> {
+                    WakeScheduler.scheduleAdhan(this);
+                    showPreSettings();
+                }, back));
+        l.add("🔈  نطق إعلان «سيُرفع الآن أذان…» بالصوت:  " + onOff(prefs.getBoolean("pre_speak", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("pre_speak", !prefs.getBoolean("pre_speak", true)).apply();
+            showPreSettings();
+        });
         l.add("📍  الزاوية:  " + new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"}[Math.max(0, Math.min(3, prefs.getInt("pre_corner", 1)))]);
         a.add(() -> choice("زاوية الدائرة", new String[]{"أعلى يسار", "أعلى يمين", "أسفل يسار", "أسفل يمين"},
                 prefs.getInt("pre_corner", 1), i -> {
@@ -5794,7 +5928,7 @@ public class MainActivity extends Activity {
                         + "4) للتحكم من أي مكان افتح:\n" + PANEL_URL + "\nوأدخل المستودع والمفتاح مرة واحدة على جوالك.\n\n"
                         + "كل جهاز يفحص التغييرات كل دقيقة تقريباً. لا تشارك المفتاح مع أحد.")
                 .setPositiveButton("حسناً", (d, w) -> showSyncSettings()).show());
-        menu("☁ المزامنة والتحكم عن بعد", l, a, this::showLauncherSettings);
+        menu("☁ المزامنة والتحكم عن بعد", l, a, this::backToGroup);
     }
 
     // ------------------------------------------------------------------ Quran
@@ -6095,7 +6229,7 @@ public class MainActivity extends Activity {
                 : "سورة " + SURAHS[Math.max(1, Math.min(114, ni.optInt("s", 1))) - 1] + "  "
                 + new java.text.SimpleDateFormat("EEE HH:mm", java.util.Locale.getDefault()).format(new java.util.Date(nx))));
         a.add(this::showQuranSettings);
-        menu("📖 القرآن الكريم", l, a, this::showLauncherSettings);
+        menu("📖 القرآن الكريم", l, a, this::backToGroup);
     }
 
     private void showQuranItem(final long id) {
@@ -6341,6 +6475,32 @@ public class MainActivity extends Activity {
 
     // ---- "the adhan will be raised now" announcement, a few seconds before the adhan
 
+    private android.speech.tts.TextToSpeech tts;
+    private boolean ttsOk;
+
+    private void initTts() {
+        if (tts != null) return;
+        try {
+            tts = new android.speech.tts.TextToSpeech(getApplicationContext(), status -> {
+                if (status != android.speech.tts.TextToSpeech.SUCCESS) return;
+                int r = tts.setLanguage(new Locale("ar"));
+                ttsOk = r >= android.speech.tts.TextToSpeech.LANG_AVAILABLE;
+                AppLog.info("TTS", "Arabic voice " + (ttsOk ? "available" : "not available (" + r + ")"));
+            });
+        } catch (Throwable t) {
+            AppLog.error("TTS", "init failed", t);
+        }
+    }
+
+    private void speak(String text) {
+        try {
+            if (!prefs.getBoolean("pre_speak", true) || tts == null || !ttsOk) return;
+            tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "ann");
+        } catch (Throwable t) {
+            AppLog.error("TTS", "speak failed", t);
+        }
+    }
+
     private TextView annView;
     private Boolean annReturn;
     private Runnable annGo;
@@ -6404,6 +6564,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
         t.animate().alpha(1f).setDuration(350L).start();
         annView = t;
+        speak("سيُرفع الآن أذان " + nm);
         AppLog.info("ADHAN", "announcing " + nm + ", adhan in " + wait + " ms");
         annGo = () -> {
             annGo = null;
@@ -6656,6 +6817,7 @@ public class MainActivity extends Activity {
         showStripNow();
         resumeNativeVideo();
         if (adhanReturn) moveTaskToBack(true);
+        handler.postDelayed(() -> WakeUtil.resumeMedia(this), adhanReturn ? 2000L : 400L);
         syncAfterIdle();
     }
 
@@ -6930,7 +7092,7 @@ public class MainActivity extends Activity {
                 : PRAYER_NAMES[ni] + " " + new java.text.SimpleDateFormat("EEE HH:mm", java.util.Locale.getDefault())
                 .format(new java.util.Date(nx))));
         a.add(this::showAdhanSettings);
-        menu("🕌 الأذان", l, a, this::showLauncherSettings);
+        menu("🕌 الأذان", l, a, this::backToGroup);
     }
 
     private String maskNames(int m) {
@@ -7119,7 +7281,7 @@ public class MainActivity extends Activity {
         a.add(() -> applyPreset(new int[]{1, 2, 3, 0}));
         l.add("↩ الافتراضي (10 / 15 / 20 / متوقف)");
         a.add(() -> applyPreset(STAGE_DEFAULTS));
-        menu("حماية الشاشة — دقائق بدون استخدام الريموت", l, a, this::showLauncherSettings);
+        menu("حماية الشاشة — دقائق بدون استخدام الريموت", l, a, this::backToGroup);
     }
 
     private void applyPreset(int[] v) {
@@ -7249,7 +7411,7 @@ public class MainActivity extends Activity {
                 this::showStripSettings, this::showStripSettings));
         l.add("🗂  إدارة التصنيفات المخصصة (" + cats.size() + ")");
         a.add(this::showCategories);
-        menu("الشريط والتصنيفات", l, a, this::showLauncherSettings);
+        menu("الشريط والتصنيفات", l, a, this::backToGroup);
     }
 
     private void showCategories() {
@@ -7463,12 +7625,6 @@ public class MainActivity extends Activity {
             applyWeatherStyle();
             showWeatherSettings();
         });
-        l.add("🖼  حجم أيقونة الحالة الجوية (سحاب/شمس):  " + prefs.getInt("w_iconsz", 100) + "%");
-        a.add(() -> numberDialog("حجم أيقونة الحالة الجوية", "w_iconsz", 100, 40, 300, "%", null,
-                this::layoutWeather, back, back));
-        l.add("💧  حجم أيقونات ونص التفاصيل (رطوبة، مطر، رياح…):  " + prefs.getInt("w_dsz", 100) + "%");
-        a.add(() -> numberDialog("حجم أيقونات ونص التفاصيل", "w_dsz", 100, 50, 250, "%", null,
-                this::layoutWeather, back, back));
         l.add("🎛  ضبط دقيق لكل مسافة في البطاقة (بكسل بكسل، حتى التداخل)");
         a.add(this::showWeatherFine);
         l.add("📌  موضع البطاقة:  " + weatherPosName());
@@ -7561,7 +7717,7 @@ public class MainActivity extends Activity {
             fetchWeather();
             toast("جارٍ التحديث…");
         });
-        menu("بطاقة الطقس", l, a, this::showLauncherSettings);
+        menu("بطاقة الطقس", l, a, this::backToGroup);
     }
 
     private void showWeatherFields() {
@@ -7716,7 +7872,7 @@ public class MainActivity extends Activity {
             prefs.edit().putInt("ui_side", i).apply();
             showMotionSettings();
         }, this::showMotionSettings));
-        menu("الصوت والحركة والمظهر", l, a, this::showLauncherSettings);
+        menu("الصوت والحركة والمظهر", l, a, this::backToGroup);
     }
 
     // ---- updates
@@ -7761,7 +7917,7 @@ public class MainActivity extends Activity {
                     } else toast("الصيغة: owner/repo");
                     showUpdateSettings();
                 }));
-        menu("التحديثات", l, a, this::showLauncherSettings);
+        menu("التحديثات", l, a, this::backToGroup);
     }
 
     private void showAdbDialog() {
@@ -7816,7 +7972,7 @@ public class MainActivity extends Activity {
             AppLog.clear();
             toast("تم المسح");
         });
-        menu("سجل الأخطاء والتقارير", l, a, this::showLauncherSettings);
+        menu("سجل الأخطاء والتقارير", l, a, this::backToGroup);
     }
 
     /** Opens the mail composer with the report (page structure is refreshed first when asked). */
@@ -8019,13 +8175,6 @@ public class MainActivity extends Activity {
     private void showPageElements() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
-        final String[] pfn = FONT_NAMES.clone();
-        pfn[0] = "الافتراضي (النظام / الصفحة الأصلية)";
-        l.add("🔤  الخط (اللانشر + الصفحة معاً):  " + pfn[Math.max(0, Math.min(pfn.length - 1, prefs.getInt("font", 0)))]);
-        a.add(() -> choice("الخط (يطبّق على اللانشر وصفحة المواقيت وبطاقة الطقس)", pfn, prefs.getInt("font", 0), i -> {
-            prefs.edit().putInt("font", i).apply();
-            recreate();
-        }, this::showPageElements));
         for (final String[] e : PG) {
             l.add(e[1] + ":  " + pgSummary(e[0]));
             a.add(() -> showPageElement(e));
@@ -8041,7 +8190,7 @@ public class MainActivity extends Activity {
             applyPageCss();
             showPageElements();
         });
-        menu("تحريك عناصر صفحة المواقيت", l, a, this::showLauncherSettings);
+        menu("تحريك عناصر صفحة المواقيت", l, a, this::backToGroup);
     }
 
     private void showPageElement(final String[] e) {
@@ -8831,7 +8980,7 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("auto_backup", !prefs.getBoolean("auto_backup", true)).apply();
             showBackupMenu();
         });
-        menu("النسخ الاحتياطي وملفات التعريف", l, a, this::showLauncherSettings);
+        menu("النسخ الاحتياطي وملفات التعريف", l, a, this::backToGroup);
     }
 
     private void showProfiles() {

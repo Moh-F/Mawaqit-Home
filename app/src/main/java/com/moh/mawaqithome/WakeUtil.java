@@ -34,6 +34,55 @@ final class WakeUtil {
         }
     }
 
+    /** Pauses whatever plays (YouTube, music…) with a media key; remembers it so it can be resumed afterwards. */
+    static void pauseMedia(Context ctx) {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null || !am.isMusicActive()) {
+                AppLog.info("MEDIA", "nothing is playing, no pause needed");
+                return;
+            }
+            mediaKey(am, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE);
+            WakeScheduler.prefs(ctx).edit().putLong("media_paused_at", System.currentTimeMillis()).apply();
+            AppLog.info("MEDIA", "playback paused before the adhan");
+        } catch (Exception e) {
+            AppLog.error("MEDIA", "pause failed", e);
+        }
+    }
+
+    /** Continues playback that was paused for the adhan (only if we paused it, and not long ago). */
+    static void resumeMedia(Context ctx) {
+        try {
+            android.content.SharedPreferences p = WakeScheduler.prefs(ctx);
+            long at = p.getLong("media_paused_at", 0L);
+            if (at == 0L) return;
+            p.edit().remove("media_paused_at").apply();
+            if (System.currentTimeMillis() - at > 25 * 60_000L) return;
+            android.media.AudioManager am = (android.media.AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            mediaKey(am, android.view.KeyEvent.KEYCODE_MEDIA_PLAY);
+            AppLog.info("MEDIA", "playback resumed after the adhan");
+        } catch (Exception e) {
+            AppLog.error("MEDIA", "resume failed", e);
+        }
+    }
+
+    private static void mediaKey(android.media.AudioManager am, int code) {
+        long t = android.os.SystemClock.uptimeMillis();
+        am.dispatchMediaKeyEvent(new android.view.KeyEvent(t, t, android.view.KeyEvent.ACTION_DOWN, code, 0));
+        am.dispatchMediaKeyEvent(new android.view.KeyEvent(t, t, android.view.KeyEvent.ACTION_UP, code, 0));
+    }
+
+    /** Where adb-to-self works: wake key + HDMI-CEC "one touch play" (turns the TV on and switches to this input). */
+    static void adbWake(Context ctx) {
+        if (AdbShell.blocked(ctx)) {
+            AppLog.info("WAKE", "adb wake skipped: self-ADB is not available on this device");
+            return;
+        }
+        AdbShell.run(ctx, "settings put global hdmi_control_auto_wakeup_enabled 1; input keyevent 224; "
+                + "cmd hdmi_control onetouchplay", null);
+    }
+
     static boolean canOverlay(Context ctx) {
         return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(ctx);
     }
