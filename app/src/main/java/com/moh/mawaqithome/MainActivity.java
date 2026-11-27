@@ -7742,6 +7742,7 @@ public class MainActivity extends Activity {
         if (in == null) return;
         if (in.getBooleanExtra("boot_guard", false)) {
             in.removeExtra("boot_guard");
+            AppLog.info("GUARD", "boot start received, watching the front for 3 minutes");
             guardUntil = System.currentTimeMillis() + 3 * 60_000L;
             handler.removeCallbacks(guardTick);
             handler.postDelayed(guardTick, 1_500L);

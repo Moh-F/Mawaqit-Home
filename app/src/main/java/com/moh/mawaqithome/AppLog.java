@@ -45,6 +45,10 @@ public final class AppLog {
     }
 
     public static synchronized void info(String tag, String msg) {
+        try {
+            android.util.Log.i("MawaqitHome", tag + ": " + msg);          // also in logcat, for adb diagnostics
+        } catch (Throwable ignored) {
+        }
         if (file == null) return;
         try {
             if (file.length() > MAX_BYTES) {
