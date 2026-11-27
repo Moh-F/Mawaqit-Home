@@ -51,6 +51,16 @@
             </intent-filter>
         </activity>
 
+        <!-- early start after reboot (direct-boot broadcast arrives before the normal boot queue) -->
+        <receiver
+            android:name=".EarlyBootReceiver"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Home button / after-boot watch (accessibility service) -->
         <service
             android:name=".HomeWatch"

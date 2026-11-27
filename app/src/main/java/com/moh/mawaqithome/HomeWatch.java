@@ -122,6 +122,42 @@ public class HomeWatch extends AccessibilityService {
         }
     }
 
+    private long homeDownAt;
+    private boolean homeLong;
+
+    /**
+     * The Home key itself is caught here, before the system acts on it: a short press opens Mawaqit Home at once (no
+     * detour through the system home), a long press (≥ 0.7 s) opens the original home screen for 3 minutes.
+     */
+    @Override
+    protected boolean onKeyEvent(android.view.KeyEvent e) {
+        if (e.getKeyCode() != android.view.KeyEvent.KEYCODE_HOME) return false;
+        SharedPreferences p = WakeScheduler.prefs(this);
+        if (!p.getBoolean("home_watch", true) || !p.getBoolean("home_key", true)) return false;
+        if (System.currentTimeMillis() < p.getLong("home_suspend_until", 0L)) return false;
+        if (e.getAction() == android.view.KeyEvent.ACTION_DOWN) {
+            if (e.getRepeatCount() == 0) {
+                homeDownAt = e.getEventTime();
+                homeLong = false;
+            } else if (!homeLong && e.getEventTime() - homeDownAt > 700) {
+                homeLong = true;
+                suspend(this, 3 * 60_000L);
+                AppLog.info("HOMEWATCH", "long Home press: original home for 3 minutes");
+                performGlobalAction(GLOBAL_ACTION_HOME);
+            }
+            return true;
+        }
+        if (e.getAction() == android.view.KeyEvent.ACTION_UP) {
+            if (!homeLong) {
+                lastLaunch = 0L;
+                bringBack("home key");
+            }
+            homeLong = false;
+            return true;
+        }
+        return true;
+    }
+
     @Override
     public void onInterrupt() {
     }
