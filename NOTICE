@@ -10,7 +10,7 @@ Fonts (bundled in app/src/main/assets/fonts, SIL Open Font License 1.1; license 
   Tajawal (Boutros International), Almarai (Almarai), Amiri (The Amiri Project Authors),
   Scheherazade New (SIL Global), Lalezar (The Lalezar Project Authors).
 
-Audio (audio/dua/Dua_after_adhan_Hisn_Al_Muslim.mp3):
+Audio (audio/dua/Dua_after_adhan_Hisn_Al_Muslim.mp3, audio/azkar/*.mp3) and adhkar texts (app/src/main/assets/azkar.json):
   From "Islamic Pro - Azkar API" (https://github.com/YousefAsalya/Islamic-Pro-azkar-API),
   MIT License, Copyright (c) 2026 Islamic Pro - Azkar API Contributors.
   Recitation of Hisn Al-Muslim (Sheikh Sa'eed Al-Qahtani) by Hamad Al-Durayhim.

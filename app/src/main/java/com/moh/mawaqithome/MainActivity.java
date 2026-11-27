@@ -596,6 +596,7 @@ public class MainActivity extends Activity {
         buildWeatherCard();
         buildCdCard();
         buildMoonCard();
+        handler.postDelayed(() -> azPrefetch(false), 90_000L);
         buildPreBadge();
         initTts();
         sync = new RemoteSync(this, prefs, syncHost);
@@ -4313,6 +4314,13 @@ public class MainActivity extends Activity {
         a.add(this::showQuranSettings);
         l.add("⏳  العدّادات (رمضان، العيد، الفجر والمغرب، أحداثي):  " + onOff(prefs.getBoolean("cd_show", false)));
         a.add(this::showCountdownSettings);
+        l.add("📿  الأذكار (الصباح، المساء، النوم) نصاً وصوتاً:  "
+                + onOff(prefs.getBoolean("azk_m_on", true) || prefs.getBoolean("azk_e_on", true) || prefs.getBoolean("azk_s_on", false)));
+        a.add(this::showAzkarSettings);
+        l.add("🕋  وضع الإقامة (عدّاد بعد الأذان):  " + onOff(prefs.getBoolean("iq_on", false)));
+        a.add(this::showIqamaSettings);
+        l.add("🗓  المناسبات الهجرية والتذكير (عرفة، عاشوراء، الأيام البيض…)");
+        a.add(this::showOccSettings);
         l.add("🕒  الوقت والتاريخ والمنطقة الزمنية");
         a.add(this::showTimeSettings);
         l.add("🔕  احترام وضع الصامت والاهتزاز وعدم الإزعاج (للجوالات):  " + onOff(prefs.getBoolean("respect_ringer", true)));
@@ -4340,6 +4348,8 @@ public class MainActivity extends Activity {
                 null, () -> { if (sizeW > 0) onSized(sizeW, sizeH); }, this::showGroupScreen, this::showGroupScreen));
         l.add("🖼  صور الخلفية من الإنترنت:  " + (bgEnabled() ? "تعمل" : "متوقفة"));
         a.add(this::showBgSettings);
+        l.add("🌒  التعتيم الليلي بين العشاء والفجر:  " + onOff(prefs.getBoolean("nd_on", true)));
+        a.add(this::showNightSettings);
         l.add("🌙  حماية الشاشة (الاختفاء والتعتيم والنوم)");
         a.add(this::showSaverSettings);
         l.add("🎛  الصوت والحركة والخط والمظهر");
@@ -4379,6 +4389,8 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("boot_guard", !prefs.getBoolean("boot_guard", true)).apply();
             showGroupSystem();
         });
+        l.add("🏡  Home Assistant (تشغيل التلفاز وتبديل المنفذ قبل الأذان):  " + onOff(HaHook.on(prefs)));
+        a.add(this::showHaSettings);
         l.add("🔌  اتصال ADB الذاتي");
         a.add(this::showAdbDialog);
         l.add("🔒  مدير الجهاز (نوم الجهاز):  " + (adminActive() ? "مفعّل" : "غير مفعّل"));
@@ -5033,6 +5045,7 @@ public class MainActivity extends Activity {
             r.add(new String[]{"fajr", "🌅 باقي للفجر", remaining(nextPrayer(0), false), "0"});
         if (showPray && prefs.getBoolean("cd_maghrib", true) && nextPrayer(3) > 0)
             r.add(new String[]{"mag", "🌇 باقي للمغرب", remaining(nextPrayer(3), false), "0"});
+        occRows(r);
         try {
             JSONArray ev = new JSONArray(prefs.getString("cd_events", "[]"));
             for (int i = 0; i < ev.length(); i++) {
@@ -5063,6 +5076,12 @@ public class MainActivity extends Activity {
                 cdUpdate();
             } catch (Exception e) {
                 AppLog.error("COUNTDOWN", "update failed", e);
+            }
+            try {
+                nightUpdate();
+                occRemind();
+            } catch (Exception e) {
+                AppLog.error("NIGHT", "update failed", e);
             }
             try {
                 moonUpdate(false);
@@ -5838,7 +5857,8 @@ public class MainActivity extends Activity {
         if ((WakeUtil.canOverlay(this) && !preOvFailed) != preInWm) preStyle();
         long now = System.currentTimeMillis();
         boolean demo = preDemoStart > 0 && now - preDemoStart < 20_000L;
-        boolean ok = (prefs.getBoolean("pre_on", true) || demo) && !adhanRunning && !quranRunning && annView == null;
+        boolean ok = (prefs.getBoolean("pre_on", true) || demo) && !adhanRunning && !quranRunning && annView == null
+                && iqView == null;
         long best = Long.MAX_VALUE;
         int bi = -1;
         if (ok && demo) {
@@ -6314,6 +6334,560 @@ public class MainActivity extends Activity {
         menu("☁ المزامنة والتحكم عن بعد", l, a, this::backToGroup);
     }
 
+    // ------------------------------------------------------------------ Adhkar (Hisn al-Muslim: text + audio)
+
+    private JSONArray azSets, azItems;
+    private int azIdx, azRep, azReps;
+    private boolean azkarMode, azPaused, azReady;
+    private String azTitle = "";
+    private android.media.MediaPlayer azMp;
+    private static volatile boolean azDownloading;
+
+    private JSONObject azSet(String key) {
+        try {
+            if (azSets == null) {
+                java.io.InputStream in = getAssets().open("azkar.json");
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] b = new byte[8192];
+                int n;
+                while ((n = in.read(b)) > 0) bo.write(b, 0, n);
+                in.close();
+                azSets = new JSONArray(bo.toString("UTF-8"));
+            }
+            for (int i = 0; i < azSets.length(); i++)
+                if (key.equals(azSets.getJSONObject(i).optString("k"))) return azSets.getJSONObject(i);
+        } catch (Exception e) {
+            AppLog.error("AZKAR", "data failed", e);
+        }
+        return null;
+    }
+
+    private File azDir() {
+        return new File(getFilesDir(), "audio/azkar");
+    }
+
+    private String azSrc(String f) {
+        File l = new File(azDir(), f);
+        if (l.length() > 1000) return l.getAbsolutePath();
+        return "https://raw.githubusercontent.com/Moh-F/Mawaqit-Home/main/audio/azkar/" + f;
+    }
+
+    /** Downloads the adhkar audio of the enabled sets once, so they also play without internet. */
+    private void azPrefetch(final boolean manual) {
+        if (azDownloading) return;
+        final List<String> sets = new ArrayList<>();
+        if (prefs.getBoolean("azk_m_on", true) || prefs.getBoolean("azk_e_on", true) || manual) sets.add("ms");
+        if (prefs.getBoolean("azk_s_on", false) || manual) sets.add("sleep");
+        if (prefs.getBoolean("iq_azk", false) || manual) sets.add("after");
+        final List<String> files = new ArrayList<>();
+        for (String k : sets) {
+            JSONObject st = azSet(k);
+            JSONArray it = st == null ? null : st.optJSONArray("items");
+            for (int i = 0; it != null && i < it.length(); i++) {
+                String f = it.optJSONObject(i).optString("f");
+                if (new File(azDir(), f).length() < 1000) files.add(f);
+            }
+        }
+        if (files.isEmpty()) {
+            if (manual) toast("كل ملفات الأذكار محمّلة ✓");
+            return;
+        }
+        azDownloading = true;
+        if (manual) toast("جارٍ تحميل " + files.size() + " ملفاً للأذكار…");
+        new Thread(() -> {
+            int ok = 0;
+            azDir().mkdirs();
+            for (String f : files) {
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(
+                            "https://raw.githubusercontent.com/Moh-F/Mawaqit-Home/main/audio/azkar/" + f).openConnection();
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(20000);
+                    File tmp = new File(azDir(), f + ".part");
+                    try (java.io.InputStream in = c.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                        byte[] b = new byte[16384];
+                        int n;
+                        while ((n = in.read(b)) > 0) out.write(b, 0, n);
+                    }
+                    if (tmp.length() > 1000 && tmp.renameTo(new File(azDir(), f))) ok++;
+                    else tmp.delete();
+                } catch (Exception e) {
+                    AppLog.error("AZKAR", "download " + f, e);
+                }
+            }
+            azDownloading = false;
+            final int fOk = ok;
+            AppLog.info("AZKAR", "downloaded " + ok + "/" + files.size());
+            if (manual) runOnUiThread(() -> toast("تم تحميل " + fOk + " من " + files.size()));
+        }).start();
+    }
+
+    private String azMeta() {
+        return "📚 حصن المسلم  •  " + arDigits(azItems == null ? 0 : azItems.length()) + " ذكراً  •  🎙 حمد الدريهم";
+    }
+
+    private void startAzkar(final JSONObject o, final boolean test) {
+        if (quranRunning) return;
+        if (adhanRunning) {
+            if (quranRetry++ < 40) handler.postDelayed(() -> startAzkar(o, test), 20_000L);
+            return;
+        }
+        quranRetry = 0;
+        if (!test && soundMode() != 0) {
+            AppLog.info("AZKAR", "not played: phone is silent / vibrate / do-not-disturb");
+            return;
+        }
+        if (!test) {
+            String key = o.optLong("id") + "@" + System.currentTimeMillis() / (10 * 60_000L);
+            if (key.equals(prefs.getString("quran_last", ""))) return;
+            prefs.edit().putString("quran_last", key).apply();
+        }
+        JSONObject set = azSet(o.optString("z", "ms"));
+        azItems = set == null ? null : set.optJSONArray("items");
+        if (azItems == null || azItems.length() == 0) {
+            toast("تعذّر تحميل نصوص الأذكار");
+            return;
+        }
+        azTitle = o.optString("zt", set.optString("title"));
+        quranRunning = true;
+        azkarMode = true;
+        azPaused = false;
+        quranReturn = prefs.getInt("quran_after", 0) == 1 && !resumed && !test;
+        AppLog.info("AZKAR", "start " + azTitle + " (" + azItems.length() + ")");
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        lastInput = SystemClock.elapsedRealtime();
+        sleepTried = false;
+        pendingReturn = null;
+        try {
+            if (topDlg != null) topDlg.dismiss();
+        } catch (Exception ignored) {
+        }
+        if (railOpen) closeRail(false);
+        if (sizeH > 0) applyStage(0, false);
+        pauseNativeVideo();
+        buildQuranView(azTitle);
+        qMeta.setText(azMeta());
+        qBism = true;
+        try {
+            HaHook.send(this, "azkar_start", -1, new JSONObject().put("title", azTitle));
+        } catch (Exception ignored) {
+        }
+        azIdx = 0;
+        azPlay();
+    }
+
+    private void azPlay() {
+        if (!quranRunning || !azkarMode) return;
+        if (azIdx >= azItems.length()) {
+            if (qInfo != null) qInfo.setText("تقبّل الله ✓");
+            if (qBar != null) {
+                qBar.frac = 1f;
+                qBar.invalidate();
+            }
+            handler.postDelayed(() -> {
+                if (azkarMode) stopQuran(true);
+            }, 3000L);
+            return;
+        }
+        JSONObject it = azItems.optJSONObject(azIdx);
+        String txt = it.optString("t").replace("((", "").replace("))", "").replaceAll("\\s+", " ").trim();
+        azReps = Math.max(1, Math.min(it.optInt("c", 1), Math.max(1, prefs.getInt("azk_rep", 3))));
+        azRep = 1;
+        qAyahText = txt;
+        setAyahWords(txt);
+        paintAyah(-1);
+        fitAyah();
+        azAudio(azSrc(it.optString("f")));
+        handler.removeCallbacks(qTick);
+        handler.post(qTick);
+    }
+
+    private void azAudio(final String u) {
+        azRelease();
+        azReady = false;
+        try {
+            azMp = new android.media.MediaPlayer();
+            azMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+            azMp.setDataSource(u);
+            azMp.setOnPreparedListener(m -> {
+                azReady = true;
+                if (!azPaused) m.start();
+            });
+            azMp.setOnCompletionListener(m -> azDone());
+            azMp.setOnErrorListener((m, w, x) -> {
+                AppLog.info("AZKAR", "audio error " + w + "/" + x + " " + u);
+                handler.postDelayed(this::azNext, 4000L);              // text stays a moment, then the next one
+                return true;
+            });
+            azMp.prepareAsync();
+        } catch (Exception e) {
+            AppLog.error("AZKAR", "audio failed", e);
+            handler.postDelayed(this::azNext, 4000L);
+        }
+    }
+
+    private void azDone() {
+        if (!azkarMode) return;
+        if (azRep < azReps) {
+            azRep++;
+            qWordShown = -2;
+            paintAyah(-1);
+            try {
+                azMp.seekTo(0);
+                azMp.start();
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        handler.postDelayed(this::azNext, Math.max(0, prefs.getInt("azk_gap", 1)) * 1000L + 300L);
+    }
+
+    private void azNext() {
+        if (!azkarMode) return;
+        azIdx++;
+        azPlay();
+    }
+
+    private void azRelease() {
+        if (azMp != null) {
+            try {
+                azMp.release();
+            } catch (Exception ignored) {
+            }
+            azMp = null;
+        }
+        azReady = false;
+    }
+
+    private void azProgress() {
+        int pos = 0, dur = 0;
+        try {
+            if (azMp != null && azReady) {
+                pos = azMp.getCurrentPosition();
+                dur = azMp.getDuration();
+            }
+        } catch (Exception ignored) {
+        }
+        int n = azItems.length();
+        float f = dur > 0 ? Math.min(1f, (float) pos / dur) : 0f;
+        if (qBar != null) {
+            qBar.frac = (azIdx + (azRep - 1 + f) / azReps) / Math.max(1, n);
+            qBar.invalidate();
+        }
+        if (qInfo != null && prefs.getBoolean("q_times", true) && azIdx < n) {
+            int c = azItems.optJSONObject(azIdx).optInt("c", 1);
+            qInfo.setText("الذكر " + arDigits(azIdx + 1) + " من " + arDigits(n)
+                    + (c > 1 ? "     🔁 " + arDigits(azRep) + " من " + arDigits(azReps)
+                    + (c > azReps ? "  (يُقال " + arDigits(c) + " مرة)" : "") : "")
+                    + "     ⏱ " + mmss(pos) + " / " + (dur > 0 ? mmss(dur) : "…"));
+        }
+        trackWords(pos, dur);
+    }
+
+    private void showAzkarSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showAzkarSettings;
+        final Runnable resched = () -> {
+            QuranSched.schedule(this);
+            azPrefetch(false);
+            showAzkarSettings();
+        };
+        l.add("🌅  أذكار الصباح:  " + (prefs.getBoolean("azk_m_on", true) ? "بعد الفجر بـ " + prefs.getInt("azk_m_off", 30) + " د" : "معطّلة"));
+        a.add(() -> {
+            prefs.edit().putBoolean("azk_m_on", !prefs.getBoolean("azk_m_on", true)).apply();
+            resched.run();
+        });
+        l.add("    ⏱ موعد أذكار الصباح بعد أذان الفجر");
+        a.add(() -> numberDialog("أذكار الصباح بعد أذان الفجر بـ", "azk_m_off", 30, 0, 300, " د", null, null, resched, back));
+        l.add("🌇  أذكار المساء:  " + (prefs.getBoolean("azk_e_on", true) ? "بعد العصر بـ " + prefs.getInt("azk_e_off", 30) + " د" : "معطّلة"));
+        a.add(() -> {
+            prefs.edit().putBoolean("azk_e_on", !prefs.getBoolean("azk_e_on", true)).apply();
+            resched.run();
+        });
+        l.add("    ⏱ موعد أذكار المساء بعد أذان العصر");
+        a.add(() -> numberDialog("أذكار المساء بعد أذان العصر بـ", "azk_e_off", 30, 0, 300, " د", null, null, resched, back));
+        l.add("🛏  أذكار النوم:  " + (prefs.getBoolean("azk_s_on", false) ? "بعد العشاء بـ " + prefs.getInt("azk_s_off", 120) + " د" : "معطّلة"));
+        a.add(() -> {
+            prefs.edit().putBoolean("azk_s_on", !prefs.getBoolean("azk_s_on", false)).apply();
+            resched.run();
+        });
+        l.add("    ⏱ موعد أذكار النوم بعد أذان العشاء");
+        a.add(() -> numberDialog("أذكار النوم بعد أذان العشاء بـ", "azk_s_off", 120, 0, 400, " د", null, null, resched, back));
+        l.add("🔁  تكرار الصوت حسب العدد، حتى:  " + prefs.getInt("azk_rep", 3) + " مرات");
+        a.add(() -> numberDialog("أقصى عدد لتكرار صوت الذكر (العدد الكامل يظهر مكتوباً)", "azk_rep", 3, 1, 100, "", null, null, back, back));
+        l.add("⏸  استراحة بين الأذكار:  " + prefs.getInt("azk_gap", 1) + " ث");
+        a.add(() -> numberDialog("استراحة بين ذكر وآخر", "azk_gap", 1, 0, 15, " ث", null, null, back, back));
+        l.add("▶  تجربة الآن: أذكار الصباح والمساء");
+        a.add(() -> {
+            try {
+                startAzkar(new JSONObject().put("id", 1L).put("z", "ms").put("zt", "أذكار الصباح والمساء"), true);
+            } catch (Exception ignored) {
+            }
+        });
+        l.add("▶  تجربة الآن: أذكار النوم");
+        a.add(() -> {
+            try {
+                startAzkar(new JSONObject().put("id", 1L).put("z", "sleep").put("zt", "أذكار النوم"), true);
+            } catch (Exception ignored) {
+            }
+        });
+        l.add("▶  تجربة الآن: الأذكار بعد الصلاة");
+        a.add(() -> {
+            try {
+                startAzkar(new JSONObject().put("id", 1L).put("z", "after").put("zt", "الأذكار بعد السلام من الصلاة"), true);
+            } catch (Exception ignored) {
+            }
+        });
+        l.add("⬇  تحميل كل ملفات الأذكار للعمل بدون إنترنت");
+        a.add(() -> azPrefetch(true));
+        l.add("🎨  مظهر الصفحة (نفس صفحة القرآن: التلوين، شريط التقدم…)");
+        a.add(this::showQuranLook);
+        l.add("ℹ  النصوص والأصوات: حصن المسلم — Islamic Pro Azkar API (MIT)");
+        a.add(back);
+        menu("📿 الأذكار", l, a, this::backToGroup);
+    }
+
+    // ------------------------------------------------------------------ Home Assistant
+
+    private void showHaSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = () -> {
+            HaHook.schedule(this);
+            showHaSettings();
+        };
+        l.add("🏡  إرسال الأحداث إلى Home Assistant:  " + onOff(prefs.getBoolean("ha_on", false)));
+        a.add(() -> {
+            prefs.edit().putBoolean("ha_on", !prefs.getBoolean("ha_on", false)).apply();
+            back.run();
+        });
+        String u = prefs.getString("ha_url", "");
+        l.add("🔗  رابط الـ Webhook:  " + (u.isEmpty() ? "غير محدد" : u));
+        a.add(() -> promptText("رابط Webhook في Home Assistant", "http://homeassistant.local:8123/api/webhook/mawaqit_home",
+                prefs.getString("ha_url", ""), v -> {
+                    prefs.edit().putString("ha_url", v.trim()).apply();
+                    back.run();
+                }));
+        l.add("⏰  حدث «الصلاة قريبة» قبل الصلاة بـ:  " + prefs.getInt("ha_lead", 60) + " ث");
+        a.add(() -> numberDialog("قبل الصلاة بكم ثانية (لتشغيل التلفاز وتبديل المنفذ)", "ha_lead", 60, 10, 900, " ث", null, null, back, back));
+        String[][] ev = {{"prayer_soon", "الصلاة قريبة"}, {"adhan_start", "بدء الأذان"}, {"adhan_end", "انتهاء الأذان والدعاء"},
+                {"iqama_wait", "بدء عدّاد الإقامة"}, {"iqama", "أُقيمت الصلاة"}, {"prayer_end", "انتهاء وقت الصلاة"},
+                {"quran_start", "بدء قراءة القرآن"}, {"quran_end", "انتهاء القرآن"}, {"azkar_start", "بدء الأذكار"}, {"azkar_end", "انتهاء الأذكار"}};
+        for (final String[] e : ev) {
+            l.add("    " + (prefs.getBoolean("ha_ev_" + e[0], true) ? "☑" : "☐") + "  " + e[1] + "   (" + e[0] + ")");
+            a.add(() -> {
+                prefs.edit().putBoolean("ha_ev_" + e[0], !prefs.getBoolean("ha_ev_" + e[0], true)).apply();
+                back.run();
+            });
+        }
+        l.add("📨  إرسال حدث تجربة الآن");
+        a.add(() -> {
+            HaHook.send(this, "test", 1, null);
+            toast("أُرسل — النتيجة تظهر في السطر التالي بعد لحظات");
+            handler.postDelayed(this::showHaSettings, 2500L);
+        });
+        l.add("ℹ  آخر إرسال:  " + prefs.getString("ha_last", "—"));
+        a.add(this::showHaSettings);
+        l.add("📖  مثال أتمتة جاهز لـ Home Assistant");
+        a.add(() -> showInfo("أتمتة Home Assistant",
+                "انسخ هذا في Home Assistant (Settings ← Automations ← Edit in YAML)، وغيّر media_player.tv ومصدر HDMI:",
+                "alias: Mawaqit Home - TV for adhan\ntrigger:\n  - platform: webhook\n    webhook_id: mawaqit_home\n"
+                        + "    allowed_methods: [POST]\n    local_only: true\naction:\n  - choose:\n"
+                        + "      - conditions: \"{{ trigger.json.event == 'prayer_soon' }}\"\n        sequence:\n"
+                        + "          - service: media_player.turn_on\n            target: {entity_id: media_player.tv}\n"
+                        + "          - delay: 8\n          - service: media_player.select_source\n"
+                        + "            target: {entity_id: media_player.tv}\n            data: {source: HDMI 2}\n"
+                        + "      - conditions: \"{{ trigger.json.event == 'iqama' }}\"\n        sequence:\n"
+                        + "          - service: media_player.media_pause\n            target: {entity_id: all}\n",
+                "حسناً", null, null, null, null, null));
+        menu("🏡 Home Assistant", l, a, this::backToGroup);
+    }
+
+    // ------------------------------------------------------------------ Night dimming
+
+    private View nightView;
+    private long nightLiftUntil;
+
+    private void nightUpdate() {
+        boolean on = prefs.getBoolean("nd_on", true);
+        float target = 0f;
+        if (on && !adhanRunning && !quranRunning && iqView == null && SystemClock.elapsedRealtime() > nightLiftUntil) {
+            int[] t = WakeScheduler.load(prefs);
+            if (t != null) {
+                Calendar c = Calendar.getInstance();
+                int m = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+                int from = (t[4] + prefs.getInt("nd_after", 60)) % 1440;
+                int to = ((t[0] - prefs.getInt("nd_before", 30)) % 1440 + 1440) % 1440;
+                boolean night = from > to ? (m >= from || m < to) : (m >= from && m < to);
+                if (night) target = Math.max(10, Math.min(90, prefs.getInt("nd_level", 40))) / 100f;
+            }
+        }
+        if (nightView == null) {
+            if (target <= 0f) return;
+            nightView = new View(this);
+            nightView.setBackgroundColor(Color.BLACK);
+            nightView.setAlpha(0f);
+            nightView.setElevation(dp(24));
+            root.addView(nightView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        if (Math.abs(nightView.getAlpha() - target) > 0.01f && !Float.valueOf(target).equals(nightView.getTag())) {
+            nightView.setTag(target);
+            nightView.animate().alpha(target).setDuration(ms(2500L)).start();
+        }
+    }
+
+    private void showNightSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showNightSettings;
+        l.add("🌙  التعتيم الليلي التلقائي:  " + onOff(prefs.getBoolean("nd_on", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("nd_on", !prefs.getBoolean("nd_on", true)).apply();
+            nightLiftUntil = 0;
+            showNightSettings();
+        });
+        l.add("🔅  مقدار التعتيم:  " + prefs.getInt("nd_level", 40) + "%");
+        a.add(() -> numberDialog("مقدار التعتيم", "nd_level", 40, 10, 90, "%", null, null, back, back));
+        l.add("⏱  يبدأ بعد العشاء بـ:  " + prefs.getInt("nd_after", 60) + " د");
+        a.add(() -> numberDialog("يبدأ التعتيم بعد أذان العشاء بـ", "nd_after", 60, 0, 360, " د", null, null, back, back));
+        l.add("⏱  ينتهي قبل الفجر بـ:  " + prefs.getInt("nd_before", 30) + " د");
+        a.add(() -> numberDialog("ينتهي التعتيم قبل أذان الفجر بـ", "nd_before", 30, 0, 240, " د", null, null, back, back));
+        l.add("👆  عند ضغط زر يرتفع التعتيم لمدّة:  " + prefs.getInt("nd_lift", 2) + " د");
+        a.add(() -> numberDialog("رفع التعتيم بعد ضغط زر لمدّة", "nd_lift", 2, 1, 60, " د", null, null, back, back));
+        menu("🌙 التعتيم الليلي", l, a, this::backToGroup);
+    }
+
+    // ------------------------------------------------------------------ Hijri occasions
+
+    private static final Object[][] OCC = {
+            // key, label, month, day, reminder for the evening before
+            {"dhul10", "✨ باقي على العشر من ذي الحجة", 12, 1, "غداً أول أيام العشر من ذي الحجة — أفضل أيام الدنيا"},
+            {"arafah", "🕋 باقي على يوم عرفة", 12, 9, "غداً يوم عرفة — صيامه يُكفّر السنة الماضية والباقية"},
+            {"hijri_ny", "🗓 باقي على رأس السنة الهجرية", 1, 1, "غداً أول محرّم — بداية العام الهجري الجديد"},
+            {"ashura", "📿 باقي على يوم عاشوراء", 1, 10, "غداً يوم عاشوراء — صيامه يُكفّر السنة الماضية"},
+            {"last10", "✨ باقي على العشر الأواخر", 9, 21, "الليلة أولى ليالي العشر الأواخر — تحرَّوا ليلة القدر"},
+    };
+
+    private boolean occOn(String k) {
+        return prefs.getBoolean("occ_" + k, true);
+    }
+
+    /** Next 13th of a Hijri month (start of the white days). */
+    private long nextWhiteDays() {
+        int adj = prefs.getInt("hijri_adj", 0);
+        int[] h = gregToHijri(Calendar.getInstance(), adj);
+        long now = System.currentTimeMillis();
+        int y = h[0], m = h[1];
+        for (int i = 0; i < 3; i++) {
+            long t = hijriToMillis(y, m, 13, adj);
+            if (t > now) return t;
+            if (++m > 12) {
+                m = 1;
+                y++;
+            }
+        }
+        return now;
+    }
+
+    private void occRows(List<String[]> r) {
+        if (!prefs.getBoolean("occ_rows", true)) return;
+        long now = System.currentTimeMillis(), win = Math.max(1, prefs.getInt("occ_win", 10)) * 86_400_000L;
+        for (Object[] o : OCC) {
+            String k = (String) o[0];
+            if (!occOn(k)) continue;
+            long t = nextHijri((Integer) o[2], (Integer) o[3]);
+            if (t - now > 0 && t - now <= win) r.add(new String[]{"occ_" + k, (String) o[1], remaining(t, true), "1"});
+        }
+        if (occOn("white")) {
+            long t = nextWhiteDays();
+            if (t - now > 0 && t - now <= 3 * 86_400_000L)
+                r.add(new String[]{"occ_white", "🌕 باقي على الأيام البيض", remaining(t, true), "1"});
+        }
+    }
+
+    private long occCheckAt;
+
+    /** The evening before (after Maghrib, when the Hijri day begins) a soft reminder is shown once. */
+    private void occRemind() {
+        long now = System.currentTimeMillis();
+        if (now - occCheckAt < 60_000L || !prefs.getBoolean("occ_rem", true)) return;
+        occCheckAt = now;
+        int[] t = WakeScheduler.load(prefs);
+        if (t == null) return;
+        Calendar c = Calendar.getInstance();
+        int m = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+        if (m < t[3] + 5 || m > t[3] + 240) return;
+        Calendar tm = Calendar.getInstance();
+        tm.add(Calendar.DAY_OF_YEAR, 1);
+        int[] h = gregToHijri(tm, prefs.getInt("hijri_adj", 0));
+        List<String[]> msgs = new ArrayList<>();
+        for (Object[] o : OCC)
+            if (occOn((String) o[0]) && h[1] == (Integer) o[2] && h[2] == (Integer) o[3]) msgs.add(new String[]{(String) o[0], (String) o[4]});
+        if (occOn("ashura") && h[1] == 1 && h[2] == 9)
+            msgs.add(new String[]{"tasua", "غداً تاسوعاء — يُستحب صيامه مع عاشوراء"});
+        if (occOn("white") && h[2] == 13) msgs.add(new String[]{"white", "غداً أول الأيام البيض (١٣–١٤–١٥) — يُستحب صيامها"});
+        if (h[1] == 9 && h[2] == 1 && prefs.getBoolean("cd_ramadan", true))
+            msgs.add(new String[]{"ramadan", "غداً أول رمضان حسب التقويم — تأكّد من إعلان رؤية الهلال"});
+        int dow = tm.get(Calendar.DAY_OF_WEEK);
+        if (prefs.getBoolean("occ_monthu", false) && (dow == Calendar.MONDAY || dow == Calendar.THURSDAY))
+            msgs.add(new String[]{"monthu", "غداً " + (dow == Calendar.MONDAY ? "الاثنين" : "الخميس") + " — يُستحب صيامه"});
+        String day = new java.text.SimpleDateFormat("yyyyMMdd", Locale.US).format(new java.util.Date());
+        for (String[] x : msgs) {
+            String key = day + x[0];
+            if (prefs.getString("occ_shown_" + x[0], "").equals(key)) continue;
+            prefs.edit().putString("occ_shown_" + x[0], key).apply();
+            AppLog.info("OCC", "reminder " + x[0]);
+            showBubble("🌙 " + x[1], 90_000L);
+            return;                                                         // one at a time; the next one in a minute
+        }
+    }
+
+    private void showOccSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showOccSettings;
+        l.add("🔔  تذكير مساء اليوم السابق (بعد المغرب):  " + onOff(prefs.getBoolean("occ_rem", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("occ_rem", !prefs.getBoolean("occ_rem", true)).apply();
+            showOccSettings();
+        });
+        l.add("⏳  عدّادات المناسبات في بطاقة العدّادات:  " + onOff(prefs.getBoolean("occ_rows", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("occ_rows", !prefs.getBoolean("occ_rows", true)).apply();
+            cdRefreshNow();
+            showOccSettings();
+        });
+        l.add("📆  يظهر العدّاد قبل المناسبة بـ:  " + prefs.getInt("occ_win", 10) + " أيام");
+        a.add(() -> numberDialog("يظهر عدّاد المناسبة قبلها بكم يوماً", "occ_win", 10, 1, 60, " يوم", null, this::cdRefreshNow, back, back));
+        for (final Object[] o : OCC) {
+            final String k = (String) o[0];
+            l.add("    " + (occOn(k) ? "☑" : "☐") + "  " + ((String) o[1]).replace("باقي على ", ""));
+            a.add(() -> {
+                prefs.edit().putBoolean("occ_" + k, !occOn(k)).apply();
+                cdRefreshNow();
+                showOccSettings();
+            });
+        }
+        l.add("    " + (occOn("white") ? "☑" : "☐") + "  🌕 الأيام البيض (كل شهر)");
+        a.add(() -> {
+            prefs.edit().putBoolean("occ_white", !occOn("white")).apply();
+            cdRefreshNow();
+            showOccSettings();
+        });
+        l.add("    " + (prefs.getBoolean("occ_monthu", false) ? "☑" : "☐") + "  تذكير صيام الاثنين والخميس");
+        a.add(() -> {
+            prefs.edit().putBoolean("occ_monthu", !prefs.getBoolean("occ_monthu", false)).apply();
+            showOccSettings();
+        });
+        l.add("ℹ  التواريخ من التقويم الهجري الحسابي مع تصحيح الأيام في إعدادات الوقت");
+        a.add(back);
+        menu("🗓 المناسبات الهجرية", l, a, this::backToGroup);
+    }
+
     // ------------------------------------------------------------------ Quran
 
     private static final String[] SURAHS = {"الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف",
@@ -6398,9 +6972,10 @@ public class MainActivity extends Activity {
 
     private final Runnable qTick = new Runnable() {
         @Override public void run() {
-            if (!quranRunning || quranPlayer == null) return;
+            if (!quranRunning || (quranPlayer == null && !azkarMode)) return;
             try {
-                quranProgress();
+                if (azkarMode) azProgress();
+                else quranProgress();
             } catch (Exception e) {
                 AppLog.error("QURAN", "progress failed", e);
             }
@@ -6431,6 +7006,10 @@ public class MainActivity extends Activity {
                     + "     ▸ مضى " + mmss(elapsed) + "     ⌛ بقي ≈ " + mmss(total - elapsed)
                     + "     ◷ السورة ≈ " + mmss(total));
         }
+        trackWords(pos, dur);
+    }
+
+    private void trackWords(int pos, int dur) {
         if (!prefs.getBoolean("q_track", true) || dur <= 0 || qWords.length == 0) return;
         int all = qCum[qCum.length - 1];
         float f = Math.max(0f, Math.min(1f, (float) pos / dur + prefs.getInt("q_lead", 0) / 100f));
@@ -6524,6 +7103,10 @@ public class MainActivity extends Activity {
     }
 
     private void startQuran(final JSONObject o, final boolean test) {
+        if (o.has("z")) {
+            startAzkar(o, test);
+            return;
+        }
         if (quranRunning) return;
         if (!test && !prefs.getBoolean("quran_on", true)) return;
         if (adhanRunning) {                                           // adhan first, then the reading
@@ -6575,6 +7158,10 @@ public class MainActivity extends Activity {
         qSurah = surah;
         qFrom = o.optInt("a", 0);
         qTo = o.optInt("b", 0);
+        try {
+            HaHook.send(this, "quran_start", -1, new JSONObject().put("surah", surah).put("surah_ar", SURAHS[surah - 1]));
+        } catch (Exception ignored) {
+        }
         buildQuranView("سورة " + SURAHS[surah - 1]);
         float vol = prefs.getInt("quran_vol", 70) / 100f;
         quranPlayer = new QuranPlayer(this, surah, o.optInt("a", 0), o.optInt("b", 0), bases, vol, new QuranPlayer.Cb() {
@@ -6730,7 +7317,8 @@ public class MainActivity extends Activity {
     private final Runnable quranLookLive = () -> {
         if (!quranRunning || quranView == null) return;
         root.removeView(quranView);
-        buildQuranView("سورة " + SURAHS[Math.max(1, Math.min(114, qSurah)) - 1]);
+        buildQuranView(azkarMode ? azTitle : "سورة " + SURAHS[Math.max(1, Math.min(114, qSurah)) - 1]);
+        if (azkarMode && qMeta != null) qMeta.setText(azMeta());
         setAyahWords(qAyahText);
         paintAyah(qWordShown >= 0 ? qWordShown : -1);
         fitAyah();
@@ -6770,6 +7358,19 @@ public class MainActivity extends Activity {
     }
 
     private void toggleQuranPause() {
+        if (azkarMode) {
+            try {
+                if (azMp != null) {
+                    if (azPaused) azMp.start();
+                    else azMp.pause();
+                    azPaused = !azPaused;
+                }
+            } catch (Exception ignored) {
+            }
+            if (qTitle != null) qTitle.setAlpha(azPaused ? 0.5f : 1f);
+            toast(azPaused ? "إيقاف مؤقت" : "متابعة");
+            return;
+        }
         if (quranPlayer == null) return;
         if (quranPlayer.isPaused()) quranPlayer.resume();
         else quranPlayer.pause();
@@ -6782,6 +7383,11 @@ public class MainActivity extends Activity {
         if (!quranRunning) return;
         quranRunning = false;
         handler.removeCallbacks(qTick);
+        if (azkarMode) {
+            azkarMode = false;
+            azRelease();
+            HaHook.send(this, "azkar_end", -1, null);
+        } else HaHook.send(this, "quran_end", -1, null);
         if (quranPlayer != null) quranPlayer.stop();
         quranPlayer = null;
         if (quranView != null) {
@@ -6794,6 +7400,7 @@ public class MainActivity extends Activity {
         resumeNativeVideo();
         if (returnToApp && quranReturn) moveTaskToBack(true);
         else if (sizeH > 0) applyStage(0, false);                      // the launcher's main page
+        handler.postDelayed(() -> WakeUtil.resumeMedia(this), returnToApp && quranReturn ? 2000L : 400L);
         syncAfterIdle();
     }
 
@@ -7283,6 +7890,10 @@ public class MainActivity extends Activity {
         annReturn = null;
         hideAnnounce();
         adhanRunning = true;
+        adhanIdxCur = idx;
+        adhanTestCur = test;
+        adhanAtCur = System.currentTimeMillis();
+        if (!test) HaHook.send(this, "adhan_start", idx, null);
         adhanEndScheduled = false;
         duaTimeUp = false;
         duaAudioDone = false;
@@ -7317,7 +7928,7 @@ public class MainActivity extends Activity {
             adhanMp = new android.media.MediaPlayer();
             adhanMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
             adhanMp.setDataSource(u);
-            float v = prefs.getInt("adhan_vol", 80) / 100f;
+            float v = adhanVolume();
             adhanMp.setVolume(v, v);
             adhanMp.setOnPreparedListener(m -> {
                 AppLog.info("ADHAN", "playing, length " + m.getDuration() / 1000 + " s");
@@ -7386,7 +7997,7 @@ public class MainActivity extends Activity {
             duaMp = new android.media.MediaPlayer();
             duaMp.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
             duaMp.setDataSource(au);
-            float v = prefs.getInt("adhan_vol", 80) / 100f;
+            float v = adhanVolume();
             duaMp.setVolume(v, v);
             duaMp.setOnPreparedListener(m -> {
                 if (!adhanRunning) return;
@@ -7488,6 +8099,27 @@ public class MainActivity extends Activity {
         root.addView(duaView, lp);
     }
 
+    private int adhanIdxCur = -1;
+    private boolean adhanTestCur;
+    private long adhanAtCur;
+
+    /** Adhan / du'a volume; the Fajr adhan can be quieter (share of the normal level). */
+    private float adhanVolume() {
+        float v = prefs.getInt("adhan_vol", 80) / 100f;
+        if (adhanIdxCur == 0) v *= Math.max(10, Math.min(100, prefs.getInt("adhan_vol_fajr", 60))) / 100f;
+        return v;
+    }
+
+    /** Back to whatever was on screen before (after the adhan, or after iqama + prayer). */
+    private void finishReturn(boolean ret) {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        showStripNow();
+        resumeNativeVideo();
+        if (ret) moveTaskToBack(true);
+        handler.postDelayed(() -> WakeUtil.resumeMedia(this), ret ? 2000L : 400L);
+        syncAfterIdle();
+    }
+
     private void endAdhan() {
         handler.removeCallbacks(adhanGuard);
         handler.removeCallbacks(duaTickR);
@@ -7501,14 +8133,158 @@ public class MainActivity extends Activity {
             root.removeView(duaView);
             duaView = null;
         }
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         adhanRunning = false;
+        if (!adhanTestCur) HaHook.send(this, "adhan_end", adhanIdxCur, null);
+        if (startIqama()) return;                                        // iqama countdown, then the prayer, then back
         AppLog.info("ADHAN", "finished; returning to previous app: " + adhanReturn);
-        showStripNow();
-        resumeNativeVideo();
-        if (adhanReturn) moveTaskToBack(true);
-        handler.postDelayed(() -> WakeUtil.resumeMedia(this), adhanReturn ? 2000L : 400L);
-        syncAfterIdle();
+        finishReturn(adhanReturn);
+    }
+
+    // ------------------------------------------------------------------ Iqama mode (off by default)
+
+    private static final int[] IQ_DEF = {20, 15, 15, 7, 15};
+    private LinearLayout iqView;
+    private TextView iqTitle, iqTime, iqSub;
+    private long iqAt, iqEnd, iqBlockAt;
+    private int iqIdx;
+    private boolean iqReturn, iqStarted;
+
+    private boolean startIqama() {
+        if (!prefs.getBoolean("iq_on", false) || adhanTestCur || adhanIdxCur < 0 || adhanIdxCur > 4) return false;
+        boolean fri = adhanIdxCur == 1 && Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY;
+        if (fri && prefs.getBoolean("iq_skip_fri", true)) return false;
+        int min = prefs.getInt("iq_" + adhanIdxCur, IQ_DEF[adhanIdxCur]);
+        if (min <= 0) return false;
+        long now = System.currentTimeMillis();
+        iqIdx = adhanIdxCur;
+        iqAt = Math.max(now + 5000L, adhanAtCur + min * 60_000L);
+        iqEnd = iqAt + Math.max(1, prefs.getInt("iq_pray", 10)) * 60_000L;
+        iqReturn = adhanReturn;
+        iqStarted = false;
+        iqView = new LinearLayout(this);
+        iqView.setOrientation(LinearLayout.VERTICAL);
+        iqView.setGravity(Gravity.CENTER);
+        iqView.setPadding(dp(36), dp(18), dp(36), dp(20));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0xE6061510);
+        g.setCornerRadius(dp(26));
+        g.setStroke(Math.max(1, dp(2)), 0xFFF4C95D);
+        iqView.setBackground(g);
+        iqView.setElevation(dp(35));
+        iqTitle = text(20, true);
+        iqTitle.setTextColor(0xFFF4C95D);
+        iqTitle.setGravity(Gravity.CENTER);
+        iqTime = text(48, true);
+        iqTime.setTextColor(Color.WHITE);
+        iqTime.setGravity(Gravity.CENTER);
+        iqSub = text(13, false);
+        iqSub.setTextColor(0xCCFFFFFF);
+        iqSub.setGravity(Gravity.CENTER);
+        iqView.addView(iqTitle);
+        iqView.addView(iqTime);
+        iqView.addView(iqSub);
+        root.addView(iqView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        try {
+            HaHook.send(this, "iqama_wait", iqIdx, new JSONObject().put("minutes", min));
+        } catch (Exception ignored) {
+        }
+        AppLog.info("IQAMA", "countdown " + min + " min for " + PRAYER_NAMES[iqIdx]);
+        handler.post(iqTick);
+        return true;
+    }
+
+    private final Runnable iqTick = new Runnable() {
+        @Override public void run() {
+            if (iqView == null) return;
+            long now = System.currentTimeMillis();
+            String nm = PRAYER_NAMES[iqIdx];
+            if (now < iqAt) {
+                long sec = (iqAt - now + 999) / 1000;
+                iqTitle.setText("⏳ الإقامة لصلاة " + nm + " بعد");
+                iqTime.setText(tabDigits(String.format(Locale.US, "%02d:%02d", sec / 60, sec % 60)));
+                iqSub.setText("رجوع: إلغاء العدّاد");
+            } else if (now < iqEnd) {
+                if (!iqStarted) {
+                    iqStarted = true;
+                    HaHook.send(MainActivity.this, "iqama", iqIdx, null);
+                    if (prefs.getBoolean("iq_speak", true)) speak("أُقيمت الصلاة");
+                    AppLog.info("IQAMA", "prayer time");
+                }
+                iqTitle.setText("🕌 أُقيمت الصلاة");
+                iqTime.setText("صلاة " + nm);
+                iqSub.setText("استووا واعتدلوا  •  يعود الجهاز بعد " + mmss(iqEnd - now));
+            } else {
+                endIqama(true);
+                return;
+            }
+            if (prefs.getBoolean("iq_block", true) && now - iqBlockAt > 3000L) {   // keep other playback paused
+                iqBlockAt = now;
+                WakeUtil.pauseMedia(MainActivity.this);
+            }
+            handler.postDelayed(this, 500L);
+        }
+    };
+
+    private void endIqama(boolean natural) {
+        if (iqView == null) return;
+        handler.removeCallbacks(iqTick);
+        root.removeView(iqView);
+        iqView = null;
+        if (natural) HaHook.send(this, "prayer_end", iqIdx, null);
+        AppLog.info("IQAMA", natural ? "finished" : "cancelled");
+        if (natural && prefs.getBoolean("iq_azk", false)) {
+            try {
+                startAzkar(new JSONObject().put("id", 9000004L).put("z", "after").put("zt", "الأذكار بعد السلام من الصلاة"), true);
+                if (azkarMode) {
+                    quranReturn = iqReturn;
+                    return;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        finishReturn(iqReturn);
+    }
+
+    private void showIqamaSettings() {
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showIqamaSettings;
+        l.add("🕋  وضع الإقامة (عدّاد بعد الأذان):  " + onOff(prefs.getBoolean("iq_on", false)));
+        a.add(() -> {
+            prefs.edit().putBoolean("iq_on", !prefs.getBoolean("iq_on", false)).apply();
+            showIqamaSettings();
+        });
+        for (int k = 0; k < 5; k++) {
+            final int kk = k;
+            l.add("⏱  " + PRAYER_NAMES[k] + ": الإقامة بعد الأذان بـ " + prefs.getInt("iq_" + k, IQ_DEF[k]) + " د");
+            a.add(() -> numberDialog("الإقامة لصلاة " + PRAYER_NAMES[kk] + " بعد الأذان بـ (0 = بدون)", "iq_" + kk, IQ_DEF[kk],
+                    0, 60, " د", "بدون", null, back, back));
+        }
+        l.add("🕌  مدّة الصلاة بعد الإقامة:  " + prefs.getInt("iq_pray", 10) + " د");
+        a.add(() -> numberDialog("مدّة الصلاة بعد الإقامة (يبقى الجهاز هادئاً)", "iq_pray", 10, 1, 60, " د", null, null, back, back));
+        l.add("📅  بدون عدّاد يوم الجمعة (الخطبة):  " + onOff(prefs.getBoolean("iq_skip_fri", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("iq_skip_fri", !prefs.getBoolean("iq_skip_fri", true)).apply();
+            showIqamaSettings();
+        });
+        l.add("🔇  إبقاء أي فيديو/صوت آخر متوقفاً حتى انتهاء الصلاة:  " + onOff(prefs.getBoolean("iq_block", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("iq_block", !prefs.getBoolean("iq_block", true)).apply();
+            showIqamaSettings();
+        });
+        l.add("🔈  نطق «أُقيمت الصلاة»:  " + onOff(prefs.getBoolean("iq_speak", true)));
+        a.add(() -> {
+            prefs.edit().putBoolean("iq_speak", !prefs.getBoolean("iq_speak", true)).apply();
+            showIqamaSettings();
+        });
+        l.add("📿  الأذكار بعد الصلاة تلقائياً (نص + صوت):  " + onOff(prefs.getBoolean("iq_azk", false)));
+        a.add(() -> {
+            prefs.edit().putBoolean("iq_azk", !prefs.getBoolean("iq_azk", false)).apply();
+            if (prefs.getBoolean("iq_azk", false)) azPrefetch(false);
+            showIqamaSettings();
+        });
+        menu("🕋 وضع الإقامة", l, a, this::backToGroup);
     }
 
     // ---- audio file from the phone/laptop (upload) or from the device's own file picker
@@ -7722,6 +8498,10 @@ public class MainActivity extends Activity {
         a.add(this::showPerPrayerAdhan);
         l.add("🔊  مستوى صوت الأذان:  " + prefs.getInt("adhan_vol", 80) + "%  (ويُضبط صوت التلفاز أيضاً)");
         a.add(() -> numberDialog("مستوى صوت الأذان", "adhan_vol", 80, 5, 100, "%", null, null, back, back));
+        l.add("🌅  صوت أذان الفجر (نسبةً من مستوى الأذان):  " + prefs.getInt("adhan_vol_fajr", 60) + "%");
+        a.add(() -> numberDialog("صوت أذان الفجر ودعائه — أهدأ للنائمين", "adhan_vol_fajr", 60, 10, 100, "%", null, null, back, back));
+        l.add("🕋  وضع الإقامة (عدّاد بعد الأذان):  " + onOff(prefs.getBoolean("iq_on", false)));
+        a.add(this::showIqamaSettings);
         l.add("🤲  دعاء بعد الأذان (نصاً على الشاشة):  " + onOff(prefs.getBoolean("adhan_dua_show", true)));
         a.add(() -> {
             prefs.edit().putBoolean("adhan_dua_show", !prefs.getBoolean("adhan_dua_show", true)).apply();
@@ -10048,6 +10828,16 @@ public class MainActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent e) {
         lastInput = SystemClock.elapsedRealtime();
         int k = e.getKeyCode();
+        if (nightView != null && nightView.getAlpha() > 0.02f && !quranRunning && !adhanRunning) {
+            nightLiftUntil = SystemClock.elapsedRealtime() + Math.max(1, prefs.getInt("nd_lift", 2)) * 60_000L;
+            nightView.animate().cancel();
+            nightView.animate().alpha(0f).setDuration(ms(400L)).start();
+            if (e.getAction() == KeyEvent.ACTION_DOWN) return true;     // the first key only lifts the dimming
+        }
+        if (iqView != null && k == KeyEvent.KEYCODE_BACK) {
+            if (e.getAction() == KeyEvent.ACTION_DOWN) endIqama(false);
+            return true;
+        }
         if (quranRunning) {
             if (e.getAction() == KeyEvent.ACTION_DOWN) {
                 if (stage > 0) applyStage(0, true);            // first key only wakes the screen

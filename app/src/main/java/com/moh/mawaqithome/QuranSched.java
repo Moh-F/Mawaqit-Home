@@ -29,7 +29,30 @@ public final class QuranSched {
         }
     }
 
+    /** Built-in adhkar sessions (morning / evening / sleep), as schedule items with "z" = the adhkar set key. */
+    public static JSONArray azkarItems(SharedPreferences p) {
+        JSONArray ar = new JSONArray();
+        try {
+            if (p.getBoolean("azk_m_on", true))
+                ar.put(new JSONObject().put("id", 9000001L).put("z", "ms").put("zt", "أذكار الصباح").put("t", "post")
+                        .put("p", 0).put("h", p.getInt("azk_m_off", 30)).put("d", 127).put("on", true));
+            if (p.getBoolean("azk_e_on", true))
+                ar.put(new JSONObject().put("id", 9000002L).put("z", "ms").put("zt", "أذكار المساء").put("t", "post")
+                        .put("p", 2).put("h", p.getInt("azk_e_off", 30)).put("d", 127).put("on", true));
+            if (p.getBoolean("azk_s_on", false))
+                ar.put(new JSONObject().put("id", 9000003L).put("z", "sleep").put("zt", "أذكار النوم").put("t", "post")
+                        .put("p", 4).put("h", p.getInt("azk_s_off", 120)).put("d", 127).put("on", true));
+        } catch (Exception ignored) {
+        }
+        return ar;
+    }
+
     public static JSONObject find(SharedPreferences p, long id) {
+        JSONArray az = azkarItems(p);
+        for (int i = 0; i < az.length(); i++) {
+            JSONObject o = az.optJSONObject(i);
+            if (o != null && o.optLong("id") == id) return o;
+        }
         JSONArray ar = items(p);
         for (int i = 0; i < ar.length(); i++) {
             JSONObject o = ar.optJSONObject(i);
@@ -54,11 +77,9 @@ public final class QuranSched {
             SharedPreferences p = WakeScheduler.prefs(ctx);
             AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
             Intent i = new Intent(ctx, QuranReceiver.class);
-            if (!p.getBoolean("quran_on", true)) {
-                am.cancel(PendingIntent.getBroadcast(ctx, 9, i, PendingIntent.FLAG_UPDATE_CURRENT));
-                return;
-            }
-            JSONArray ar = items(p);
+            JSONArray ar = p.getBoolean("quran_on", true) ? items(p) : new JSONArray();
+            JSONArray az = azkarItems(p);
+            for (int k = 0; k < az.length(); k++) ar.put(az.opt(k));
             int[] pt = WakeScheduler.load(p);
             long now = System.currentTimeMillis();
             long best = Long.MAX_VALUE, bid = -1L;
