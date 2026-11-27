@@ -6452,7 +6452,7 @@ public class MainActivity extends Activity {
         quranRunning = true;
         azkarMode = true;
         azPaused = false;
-        quranReturn = prefs.getInt("quran_after", 0) == 1 && !resumed && !test;
+        quranReturn = prefs.getInt("quran_after", 0) == 1 && !resumed && !test && HomeWatch.previousIsRealApp();
         AppLog.info("AZKAR", "start " + azTitle + " (" + azItems.length() + ")");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
@@ -7135,7 +7135,7 @@ public class MainActivity extends Activity {
         for (String alt : QuranPlayer.altFolders(r)) bases.add("https://everyayah.com/data/" + alt + "/");
         quranReciterShown = QuranPlayer.reciterName(r);
         quranRunning = true;
-        quranReturn = prefs.getInt("quran_after", 0) == 1 && !resumed && !test;
+        quranReturn = prefs.getInt("quran_after", 0) == 1 && !resumed && !test && HomeWatch.previousIsRealApp();
         AppLog.info("QURAN", "start surah " + surah + " " + o.optInt("a") + "-" + o.optInt("b") + " reciter " + r
                 + " returnToApp=" + quranReturn);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
@@ -7826,7 +7826,8 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-        annReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test;
+        annReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test && HomeWatch.previousIsRealApp();
+        AppLog.info("ADHAN", "previous app: " + HomeWatch.lastForeign + " -> return afterwards: " + annReturn);
         if (quranRunning) stopQuran(false);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
@@ -7887,7 +7888,8 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-        adhanReturn = annReturn != null ? annReturn : prefs.getBoolean("adhan_return", true) && !resumed && !test;
+        adhanReturn = annReturn != null ? annReturn : prefs.getBoolean("adhan_return", true) && !resumed && !test
+                && HomeWatch.previousIsRealApp();
         annReturn = null;
         hideAnnounce();
         adhanRunning = true;

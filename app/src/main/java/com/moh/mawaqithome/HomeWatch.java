@@ -26,7 +26,26 @@ public class HomeWatch extends AccessibilityService {
             "com.google.android.apps.tv.launcherx", "com.google.android.tvlauncher",
             "com.google.android.leanbacklauncher", "com.android.tv.launcher", "com.google.android.tungsten.setupwraith"};
 
-    private final Set<String> launchers = new HashSet<>();
+    private static final Set<String> launchers = new HashSet<>();
+
+    /** Last app (not us, not the system UI) whose window came to the front, and whether the service is running. */
+    static volatile String lastForeign;
+    static volatile boolean connected;
+
+    static boolean isLauncher(String pkg) {
+        if (pkg == null) return true;
+        for (String k : KNOWN) if (k.equals(pkg)) return true;
+        return launchers.contains(pkg);
+    }
+
+    /**
+     * Whether going "back to the previous app" after the adhan / Quran makes sense: not when that app was the system
+     * home screen (it would stay on top). Without the service we cannot tell, so the old behaviour stays.
+     */
+    static boolean previousIsRealApp() {
+        if (!connected) return true;
+        return lastForeign != null && !isLauncher(lastForeign);
+    }
     private long lastLaunch;
 
     static ComponentName component(Context c) {
@@ -91,6 +110,7 @@ public class HomeWatch extends AccessibilityService {
             }
         } catch (Exception ignored) {
         }
+        connected = true;
         AppLog.info("HOMEWATCH", "connected, watching " + launchers);
         if (SystemClock.elapsedRealtime() < 10 * 60_000L) bringBack("boot");
     }
@@ -99,7 +119,11 @@ public class HomeWatch extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent e) {
         if (e == null || e.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         CharSequence pkg = e.getPackageName();
-        if (pkg == null || !launchers.contains(pkg.toString())) return;
+        if (pkg == null) return;
+        String ps = pkg.toString();
+        if (!ps.equals(getPackageName()) && !ps.equals("com.android.systemui") && !ps.contains("inputmethod")
+                && !ps.contains(".hud")) lastForeign = ps;
+        if (!launchers.contains(ps)) return;
         bringBack(pkg.toString());
     }
 
@@ -156,6 +180,12 @@ public class HomeWatch extends AccessibilityService {
             return true;
         }
         return true;
+    }
+
+    @Override
+    public void onDestroy() {
+        connected = false;
+        super.onDestroy();
     }
 
     @Override
