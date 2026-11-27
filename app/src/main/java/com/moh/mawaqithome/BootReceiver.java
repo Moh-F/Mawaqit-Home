@@ -16,6 +16,7 @@ public class BootReceiver extends BroadcastReceiver {
         String action = intent != null ? intent.getAction() : null;
         AppLog.info("BOOT", "received " + action);
         WakeScheduler.scheduleNext(ctx);
+        if (WakeScheduler.prefs(ctx).getBoolean("home_watch", true)) HomeWatch.enableSelf(ctx);
         boolean replaced = Intent.ACTION_MY_PACKAGE_REPLACED.equals(action);
         if (!replaced && !WakeScheduler.prefs(ctx).getBoolean("boot", true)) return;
         try {

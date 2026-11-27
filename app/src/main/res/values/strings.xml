@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Mawaqit Home</string>
+    <string name="home_watch_label">Mawaqit Home — زر الرئيسية</string>
+    <string name="home_watch_desc">يجعل زر Home في جهاز التحكم يفتح Mawaqit Home بدل واجهة الجهاز الأصلية، ويتحقق بعد تشغيل الجهاز أن Mawaqit Home هو الظاهر. لا يقرأ محتوى الشاشة ولا يجمع أي بيانات.</string>
 </resources>

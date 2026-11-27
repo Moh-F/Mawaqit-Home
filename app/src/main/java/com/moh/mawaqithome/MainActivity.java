@@ -595,6 +595,7 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);                      // start the network as early as possible
         buildWeatherCard();
         buildCdCard();
+        buildMoonCard();
         buildPreBadge();
         initTts();
         sync = new RemoteSync(this, prefs, syncHost);
@@ -674,6 +675,14 @@ public class MainActivity extends Activity {
         resolveUrl(intent);
         if (!url.equals(old)) webView.loadUrl(url);
         if (intent.getBooleanExtra("wake", false)) doWake();
+        boolean homeKey = intent.getBooleanExtra("from_home", false)
+                || (intent.getCategories() != null && intent.getCategories().contains(Intent.CATEGORY_HOME));
+        if (homeKey && !adhanRunning && !quranRunning) {                // Home button: show the main page
+            intent.removeExtra("from_home");
+            if (railOpen) closeRail(false);
+            if (sizeH > 0) applyStage(0, false);
+            showStripNow();
+        }
         handleAdhanIntent(intent);
     }
 
@@ -700,6 +709,11 @@ public class MainActivity extends Activity {
         if (prefs.getBoolean("boot_guard", true) && !AdbShell.blocked(this)
                 && System.currentTimeMillis() - prefs.getLong("home_try_at", 0L) > 6L * 3600_000L && !isDefaultHome())
             handler.postDelayed(() -> forceLauncher(false), 6000L);
+        if (prefs.getBoolean("home_watch", true) && !HomeWatch.enabled(this)) {
+            if (!HomeWatch.enableSelf(this) && !AdbShell.blocked(this)
+                    && System.currentTimeMillis() - prefs.getLong("hw_try_at", 0L) > 6L * 3600_000L)
+                handler.postDelayed(() -> enableHomeWatch(false), 8000L);
+        }
         long ts = prefs.getLong("prayers_ts", 0L);
         if (System.currentTimeMillis() - ts > 30L * 60 * 1000) {
             handler.removeCallbacks(prayerTask);
@@ -1270,6 +1284,34 @@ public class MainActivity extends Activity {
 
     private int gDate() { return fine("w_f_date", 0); }
 
+    // temperature colour scale: cold blue → icy cyan → mild white → warm yellow → orange → hot red
+    private static final int[] HEAT_T = {-15, -5, 0, 8, 15, 21, 27, 33, 39};
+    private static final int[] HEAT_C = {0xFF5B6CFF, 0xFF5FA8FF, 0xFF8FD8FF, 0xFFCFF0FF, 0xFFF4F7EC, 0xFFFFE680,
+            0xFFFFB347, 0xFFFF6B4A, 0xFFFF3B5C};
+
+    private static int heatColor(int t) {
+        if (t <= HEAT_T[0]) return HEAT_C[0];
+        for (int i = 1; i < HEAT_T.length; i++)
+            if (t <= HEAT_T[i]) return blend(HEAT_C[i - 1], HEAT_C[i], (t - HEAT_T[i - 1]) / (float) (HEAT_T[i] - HEAT_T[i - 1]));
+        return HEAT_C[HEAT_C.length - 1];
+    }
+
+    /** Colours every temperature in the text by its value (off, or a fixed colour chosen → plain text). */
+    private CharSequence heat(String txt) {
+        if (txt == null || !prefs.getBoolean("w_heat", true) || prefs.getInt("w_temp_col", 0) > 0) return txt;
+        android.text.SpannableString sp = new android.text.SpannableString(txt);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("-?\\d+°").matcher(txt);
+        while (m.find()) {
+            try {
+                int t = Integer.parseInt(txt.substring(m.start(), m.end() - 1));
+                sp.setSpan(new android.text.style.ForegroundColorSpan(heatColor(t)), m.start(), m.end(),
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            } catch (Exception ignored) {
+            }
+        }
+        return sp;
+    }
+
     private float wp(String k) {
         return Math.max(30, Math.min(300, prefs.getInt(k, 100))) / 100f;
     }
@@ -1755,11 +1797,12 @@ public class MainActivity extends Activity {
             for (int k = 0; k < 5; k++) wFld[i][k].setText(ft[k]);
             if (i == 0) {
                 wIcon[i].setText(weather.curIcon);
-                wTemp[i].setText(weather.curTemp + "°");
+                wTemp[i].setText(heat(weather.curTemp + "°"));
             } else {
                 wIcon[i].setText(d.icon);
-                wTemp[i].setText(d.max + "°/" + d.min + "°");
+                wTemp[i].setText(heat(d.max + "°/" + d.min + "°"));
             }
+            wFld[i][4].setText(heat(ft[4]));
         }
         layoutWeather();
         updateWeatherAge();
@@ -4176,6 +4219,63 @@ public class MainActivity extends Activity {
         else AppLog.info("HOME", "not the default home app and ADB is not available here");
     }
 
+    /** Switches the Home-button service on: by itself (WRITE_SECURE_SETTINGS), through self-ADB, or with help. */
+    private void enableHomeWatch(final boolean manual) {
+        if (HomeWatch.enabled(this) || HomeWatch.enableSelf(this)) {
+            if (manual) toast("زر Home يفتح Mawaqit Home ✓");
+            return;
+        }
+        prefs.edit().putLong("hw_try_at", System.currentTimeMillis()).apply();
+        if (!AdbShell.blocked(this)) {
+            AdbShell.run(this, "pm grant " + getPackageName() + " android.permission.WRITE_SECURE_SETTINGS; "
+                    + "settings put secure enabled_accessibility_services " + HomeWatch.enableValue(this)
+                    + "; settings put secure accessibility_enabled 1", (ok, out) -> {
+                boolean on = HomeWatch.enabled(this);
+                AppLog.info("HOMEWATCH", "adb enable -> " + on);
+                if (manual) {
+                    if (on) toast("تم ✓ زر Home يفتح Mawaqit Home");
+                    else showHomeWatchHelp();
+                }
+            });
+            return;
+        }
+        if (manual) showHomeWatchHelp();
+    }
+
+    private void showHomeWatchHelp() {
+        String pkg = getPackageName();
+        showInfo("تفعيل زر Home",
+                "على Fire TV لا يمكن تفعيلها من الجهاز نفسه. نفّذ مرة واحدة من الكمبيوتر (نفس الشبكة، تصحيح ADB مفعّل) هذين الأمرين، "
+                        + "وبعدها يفعّلها التطبيق بنفسه دائماً حتى بعد التحديث وإعادة التشغيل:",
+                "adb connect IP-الجهاز\nadb shell pm grant " + pkg + " android.permission.WRITE_SECURE_SETTINGS\n"
+                        + "adb shell settings put secure enabled_accessibility_services " + pkg + "/" + HomeWatch.class.getName()
+                        + "\nadb shell settings put secure accessibility_enabled 1",
+                "فتح إعدادات إمكانية الوصول", () -> {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    } catch (Exception e) {
+                        toast("غير متاحة على هذا الجهاز");
+                    }
+                }, "حسناً", null, null, null);
+    }
+
+    private void openSystemHome() {
+        HomeWatch.suspend(this, 3 * 60_000L);
+        try {
+            Intent h = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+            for (android.content.pm.ResolveInfo r : getPackageManager().queryIntentActivities(h, 0)) {
+                String p = r.activityInfo.packageName;
+                if (p.equals(getPackageName()) || p.equals("com.android.settings")) continue;
+                startActivity(new Intent(h).setClassName(p, r.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                toast("واجهة الجهاز الأصلية — يعود Mawaqit Home تلقائياً بعد 3 دقائق");
+                return;
+            }
+        } catch (Exception e) {
+            AppLog.error("HOME", "open system home failed", e);
+        }
+        toast("لم أجد واجهة الجهاز الأصلية");
+    }
+
     private void openHomeChooser() {
         try {
             startActivity(new Intent(android.provider.Settings.ACTION_HOME_SETTINGS));
@@ -4229,6 +4329,8 @@ public class MainActivity extends Activity {
         final List<Runnable> a = new ArrayList<>();
         l.add("🌦  بطاقة الطقس");
         a.add(this::showWeatherSettings);
+        l.add("🌙  القمر حسب طوره (الموقع، الحجم، اللون، الإضاءة…):  " + onOff(prefs.getBoolean("moon_show", true)));
+        a.add(this::showMoonSettings);
         l.add("🎯  تحريك عناصر صفحة المواقيت");
         a.add(this::showPageElements);
         l.add("☰  الشريط والتصنيفات والقائمة");
@@ -4254,6 +4356,19 @@ public class MainActivity extends Activity {
             forceLauncher(true);
             handler.postDelayed(this::showGroupSystem, 1500L);
         });
+        l.add("⌂  زر Home في جهاز التحكم يفتح Mawaqit Home:  " + (!prefs.getBoolean("home_watch", true) ? "متوقف"
+                : HomeWatch.enabled(this) ? "يعمل ✓" : "غير مفعّل ✗ — اضغط للتفعيل"));
+        a.add(() -> {
+            if (!HomeWatch.enabled(this) && prefs.getBoolean("home_watch", true)) {
+                enableHomeWatch(true);
+                handler.postDelayed(this::showGroupSystem, 1500L);
+            } else {
+                prefs.edit().putBoolean("home_watch", !prefs.getBoolean("home_watch", true)).apply();
+                showGroupSystem();
+            }
+        });
+        l.add("🏠  فتح واجهة الجهاز الأصلية (3 دقائق)");
+        a.add(this::openSystemHome);
         l.add("🚀  تشغيل اللانشر عند الإقلاع:  " + onOff(prefs.getBoolean("boot", true)));
         a.add(() -> {
             prefs.edit().putBoolean("boot", !prefs.getBoolean("boot", true)).apply();
@@ -4950,6 +5065,11 @@ public class MainActivity extends Activity {
                 AppLog.error("COUNTDOWN", "update failed", e);
             }
             try {
+                moonUpdate(false);
+            } catch (Exception e) {
+                AppLog.error("MOON", "update failed", e);
+            }
+            try {
                 preUpdate();
             } catch (Exception e) {
                 AppLog.error("PRE", "update failed", e);
@@ -5059,6 +5179,7 @@ public class MainActivity extends Activity {
     }
 
     private void positionCd() {
+        positionMoon();
         if (cdCard == null || sizeW <= 0) return;
         cdCard.measure(View.MeasureSpec.makeMeasureSpec(sizeW, View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(sizeH, View.MeasureSpec.AT_MOST));
@@ -5072,6 +5193,7 @@ public class MainActivity extends Activity {
     }
 
     private void applyCdVis(boolean animate) {
+        applyMoonVis(animate);
         if (cdCard == null) return;
         boolean visible = pageMain || !prefs.getBoolean("w_hide_adhan", true);
         int pcl = prefs.getInt("sv_clear", 0);
@@ -5330,6 +5452,267 @@ public class MainActivity extends Activity {
             if (v != null && v.hasVibrator()) v.vibrate(new long[]{0, 700, 300, 700, 300, 700}, -1);
         } catch (Exception ignored) {
         }
+    }
+
+    // ------------------------------------------------------------------ Moon (real phase, drawn on a lunar texture)
+
+    private static final double SYNODIC = 29.530588853;
+    private LinearLayout moonCard;
+    private MoonView moonView;
+    private TextView moonLabel;
+    private Bitmap moonTex, moonImg;
+    private String moonKey = "";
+
+    /** Moon age in days since the last new moon (mean lunation; accurate to within about half a day). */
+    private static double moonAge(long ms) {
+        double jd = ms / 86400000.0 + 2440587.5;
+        double d = (jd - 2451550.1) % SYNODIC;
+        return d < 0 ? d + SYNODIC : d;
+    }
+
+    private static String moonPhaseName(double age) {
+        if (age < 1.0 || age >= 28.5) return "محاق";
+        if (age < 6.4) return "هلال متزايد";
+        if (age < 8.4) return "تربيع أول";
+        if (age < 13.8) return "أحدب متزايد";
+        if (age < 15.8) return "بدر";
+        if (age < 21.1) return "أحدب متناقص";
+        if (age < 23.1) return "تربيع ثانٍ";
+        return "هلال متناقص";
+    }
+
+    private static final String[] MOON_TINTS = {"طبيعي", "ذهبي دافئ", "فضي بارد", "أبيض ناصع", "عنبري (قرب الأفق)"};
+    private static final float[][] MOON_TINT_RGB = {{1f, 1f, 1f}, {1.04f, 0.9f, 0.62f}, {0.9f, 0.96f, 1.06f},
+            {1.08f, 1.08f, 1.08f}, {1.06f, 0.78f, 0.5f}};
+
+    private final class MoonView extends View {
+        final android.graphics.Paint pt = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG
+                | android.graphics.Paint.FILTER_BITMAP_FLAG);
+        int disk;
+        float lit;
+
+        MoonView() {
+            super(MainActivity.this);
+        }
+
+        int pad() {
+            return Math.round(disk * 0.5f * Math.max(0, Math.min(200, prefs.getInt("moon_glow_size", 60))) / 100f);
+        }
+
+        @Override protected void onDraw(Canvas c) {
+            if (moonImg == null) return;
+            float cx = getWidth() / 2f, cy = getHeight() / 2f, r = disk / 2f;
+            int g = Math.max(0, Math.min(100, prefs.getInt("moon_glow", 45)));
+            if (g > 0 && pad() > 0) {
+                int gc = wcol("moon_glow_col", 0xFFFFF4D6);
+                int a0 = Math.round(g * 2.55f * (0.25f + 0.75f * lit));
+                pt.setShader(new android.graphics.RadialGradient(cx, cy, r + pad(),
+                        new int[]{withAlpha(gc, a0), withAlpha(gc, a0 / 3), withAlpha(gc, 0)},
+                        new float[]{r / (r + pad()), (r + pad() * 0.35f) / (r + pad()), 1f}, android.graphics.Shader.TileMode.CLAMP));
+                c.drawCircle(cx, cy, r + pad(), pt);
+                pt.setShader(null);
+            }
+            c.drawBitmap(moonImg, cx - r, cy - r, pt);
+        }
+    }
+
+    private int moonDisk() {
+        return Math.max(dp(16), Math.round(unit() * 90f * Math.max(20, Math.min(400, prefs.getInt("moon_size", 100))) / 100f));
+    }
+
+    private void buildMoonCard() {
+        moonCard = new LinearLayout(this);
+        moonCard.setOrientation(LinearLayout.VERTICAL);
+        moonCard.setGravity(Gravity.CENTER_HORIZONTAL);
+        moonCard.setVisibility(View.GONE);
+        moonView = new MoonView();
+        moonCard.addView(moonView);
+        moonLabel = new TextView(this);
+        moonLabel.setGravity(Gravity.CENTER);
+        moonLabel.setTextDirection(View.TEXT_DIRECTION_RTL);
+        moonLabel.setIncludeFontPadding(false);
+        moonCard.addView(moonLabel);
+        shiftLayer.addView(moonCard, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT));
+        moonUpdate(true);
+    }
+
+    /** Renders the lit part of the textured disk like a sphere lit by the sun; the dark part keeps a faint earthshine. */
+    private Bitmap renderMoon(int d, double phi, double rotDeg) {
+        if (moonTex == null) {
+            moonTex = android.graphics.BitmapFactory.decodeResource(getResources(), R.drawable.moon_tex);
+            if (moonTex == null) return null;
+        }
+        Bitmap src = Bitmap.createScaledBitmap(moonTex, d, d, true);
+        int[] px = new int[d * d];
+        src.getPixels(px, 0, d, 0, 0, d, d);
+        if (src != moonTex) src.recycle();
+        float[] tint = MOON_TINT_RGB[Math.max(0, Math.min(MOON_TINT_RGB.length - 1, prefs.getInt("moon_tint", 0)))];
+        float br = Math.max(20, Math.min(200, prefs.getInt("moon_bright", 100))) / 100f;
+        float earth = Math.max(0, Math.min(60, prefs.getInt("moon_earth", 10))) / 100f;
+        double sx = Math.sin(phi), sz = -Math.cos(phi), rot = Math.toRadians(rotDeg);
+        double cr = Math.cos(rot), sr = Math.sin(rot);
+        float half = d / 2f;
+        for (int j = 0; j < d; j++) {
+            for (int i = 0; i < d; i++) {
+                double X = (i + 0.5 - half) / half, Y = -(j + 0.5 - half) / half;
+                double r2 = X * X + Y * Y;
+                int k = j * d + i;
+                if (r2 > 1.0) {
+                    px[k] = 0;
+                    continue;
+                }
+                double Z = Math.sqrt(1 - r2);
+                double Xr = X * cr + Y * sr;                      // the lit side can be tilted (crescent "boat" angle)
+                double nd = Xr * sx + Z * sz;
+                double lam = Math.max(0, nd), soft = Math.max(0, Math.min(1, (nd + 0.03) / 0.21));
+                double I = 0.35 * lam + 0.65 * Math.pow(soft, 1.5);
+                double f = (earth + (1 - earth) * I) * br;
+                int c = px[k];
+                int rr = (int) Math.min(255, ((c >> 16) & 255) * f * tint[0]);
+                int gg = (int) Math.min(255, ((c >> 8) & 255) * f * tint[1]);
+                int bb = (int) Math.min(255, (c & 255) * f * tint[2]);
+                double edge = (1 - Math.sqrt(r2)) * half;          // one-pixel soft rim
+                int al = edge >= 1 ? 255 : (int) Math.max(0, edge * 255);
+                px[k] = (al << 24) | (rr << 16) | (gg << 8) | bb;
+            }
+        }
+        return Bitmap.createBitmap(px, d, d, Bitmap.Config.ARGB_8888);
+    }
+
+    private void moonUpdate(boolean force) {
+        if (moonCard == null) return;
+        boolean on = prefs.getBoolean("moon_show", true);
+        moonCard.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (!on) return;
+        long now = System.currentTimeMillis();
+        double age = moonAge(now);
+        double phi = 2 * Math.PI * age / SYNODIC;
+        int d = moonDisk();
+        String key = d + "|" + Math.round(phi * 400) + "|" + prefs.getInt("moon_tint", 0) + "|" + prefs.getInt("moon_bright", 100)
+                + "|" + prefs.getInt("moon_earth", 10) + "|" + prefs.getInt("moon_rot", 0);
+        if (force || !key.equals(moonKey)) {
+            moonKey = key;
+            Bitmap b = renderMoon(d, phi, prefs.getInt("moon_rot", 0));
+            if (b != null) {
+                if (moonImg != null) moonImg.recycle();
+                moonImg = b;
+            }
+            moonView.disk = d;
+            moonView.lit = (float) ((1 - Math.cos(phi)) / 2);
+            int box = d + 2 * moonView.pad();
+            LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(box, box);
+            moonView.setLayoutParams(vp);
+            moonView.invalidate();
+            styleMoonCard();
+        }
+        if (prefs.getBoolean("moon_label", true)) {
+            int pct = (int) Math.round(100 * (1 - Math.cos(phi)) / 2);
+            String t = moonPhaseName(age);
+            if (prefs.getBoolean("moon_label_details", true))
+                t += "\nعمره " + arDigits((int) Math.floor(age)) + " يوماً  •  مضاء " + arDigits(pct) + "٪";
+            moonLabel.setText(t);
+            moonLabel.setVisibility(View.VISIBLE);
+        } else moonLabel.setVisibility(View.GONE);
+        if (force) positionMoon();
+    }
+
+    private void styleMoonCard() {
+        moonLabel.setTypeface(tf(true));
+        moonLabel.setTextColor(wcol("moon_label_col", 0xFFF4E9C8));
+        moonLabel.setTextSize(TypedValue.COMPLEX_UNIT_PX, unit() * 11f * Math.max(40, Math.min(300, prefs.getInt("moon_label_pct", 100))) / 100f);
+        moonLabel.setLineSpacing(fine("moon_f_lls", 0), 1f);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = fine("moon_f_gap", -moonView.pad() + Math.round(unit() * 4));
+        moonLabel.setLayoutParams(lp);
+        if (prefs.getBoolean("moon_card", false)) {
+            int a = Math.max(0, Math.min(100, prefs.getInt("moon_card_a", 45)));
+            GradientDrawable g = new GradientDrawable();
+            g.setColor(withAlpha(0xFF06120D, a * 255 / 100));
+            g.setCornerRadius(dp(prefs.getInt("moon_card_r", 18)));
+            g.setStroke(Math.max(1, dp(1)), withAlpha(0xFFF4C95D, a * 200 / 100));
+            moonCard.setBackground(g);
+        } else moonCard.setBackground(null);
+        int pin = fine("moon_f_pad", Math.round(unit() * 6));
+        moonCard.setPadding(pin, pin, pin, pin);
+    }
+
+    private void positionMoon() {
+        if (moonCard == null || sizeW <= 0 || moonCard.getVisibility() != View.VISIBLE) return;
+        moonCard.measure(View.MeasureSpec.makeMeasureSpec(sizeW, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(sizeH, View.MeasureSpec.AT_MOST));
+        int cw = moonCard.getMeasuredWidth(), ch = moonCard.getMeasuredHeight();
+        int mL = fine("moon_f_ml", wsc(10)), mR = fine("moon_f_mr", wsc(10)), mT = fine("moon_f_mt", wsc(10)), mB = fine("moon_f_mb", wsc(10));
+        int region = topH > 0 ? topH : sizeH;
+        moonCard.setTranslationX(mL + Math.max(0, sizeW - cw - mL - mR) * prefs.getInt("moon_x", 3) / 100f);
+        moonCard.setTranslationY(mT + Math.max(0, region - ch - mT - mB) * prefs.getInt("moon_y", 60) / 100f);
+    }
+
+    private void applyMoonVis(boolean animate) {
+        if (moonCard == null) return;
+        boolean visible = pageMain || !prefs.getBoolean("w_hide_adhan", true);
+        int pcl = prefs.getInt("sv_clear", 0);
+        float full = (stage >= 1 && stage <= 2 && pcl > 0) ? 1f - pcl / 100f : 1f;
+        full *= Math.max(10, Math.min(100, prefs.getInt("moon_alpha", 100))) / 100f;
+        moonCard.animate().alpha(visible ? full : 0f).setDuration(animate ? ms(600L) : 0L).start();
+    }
+
+    private final Runnable moonLive = () -> {
+        moonUpdate(true);
+        styleMoonCard();
+        positionMoon();
+        applyMoonVis(false);
+    };
+
+    private void showMoonSettings() {
+        styleLive = moonLive;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showMoonSettings;
+        double age = moonAge(System.currentTimeMillis());
+        l.add("ℹ  الآن: " + moonPhaseName(age) + " — عمره " + arDigits((int) Math.floor(age)) + " يوماً");
+        a.add(back);
+        cdToggle(l, a, "إظهار القمر", "moon_show", true, back);
+        l.add("— الموقع والحجم —");
+        a.add(back);
+        cdNum(l, a, "الإزاحة الأفقية", "moon_x", 3, 0, 100, "%", back, false);
+        cdNum(l, a, "الإزاحة الرأسية", "moon_y", 60, 0, 100, "%", back, false);
+        cdNum(l, a, "الحجم", "moon_size", 100, 20, 400, "%", back, false);
+        cdNum(l, a, "ميل الهلال (درجة)", "moon_rot", 0, -90, 90, "°", back, false);
+        cdNum(l, a, "الشفافية العامة", "moon_alpha", 100, 10, 100, "%", back, false);
+        l.add("— اللون والإضاءة —");
+        a.add(back);
+        l.add("🎨  لون القمر:  " + MOON_TINTS[Math.max(0, Math.min(MOON_TINTS.length - 1, prefs.getInt("moon_tint", 0)))]);
+        a.add(() -> choice("لون القمر", MOON_TINTS, prefs.getInt("moon_tint", 0), i -> {
+            prefs.edit().putInt("moon_tint", i).apply();
+            runStyleLive();
+            back.run();
+        }, back));
+        cdNum(l, a, "السطوع", "moon_bright", 100, 20, 200, "%", back, false);
+        cdNum(l, a, "ظهور الجزء المظلم (ضوء الأرض)", "moon_earth", 10, 0, 60, "%", back, false);
+        cdNum(l, a, "قوة الهالة المضيئة", "moon_glow", 45, 0, 100, "%", back, false);
+        cdNum(l, a, "حجم الهالة", "moon_glow_size", 60, 0, 200, "%", back, false);
+        cdColor(l, a, "لون الهالة", "moon_glow_col", 0, WX_COL_NAMES, back);
+        l.add("— النص تحت القمر —");
+        a.add(back);
+        cdToggle(l, a, "إظهار اسم الطور", "moon_label", true, back);
+        cdToggle(l, a, "إظهار العمر ونسبة الإضاءة", "moon_label_details", true, back);
+        cdNum(l, a, "حجم الخط", "moon_label_pct", 100, 40, 300, "%", back, false);
+        cdColor(l, a, "لون النص", "moon_label_col", 0, WX_COL_NAMES, back);
+        cdNum(l, a, "المسافة بين القمر والنص (سالب = أقرب)", "moon_f_gap", fineSteps(-moonView.pad() + Math.round(unit() * 4)), -300, 200, "", back, true);
+        cdNum(l, a, "المسافة بين سطري النص", "moon_f_lls", 0, -30, 60, "", back, true);
+        l.add("— الإطار والهوامش —");
+        a.add(back);
+        cdToggle(l, a, "بطاقة خلف القمر", "moon_card", false, back);
+        cdNum(l, a, "شفافية البطاقة", "moon_card_a", 45, 0, 100, "%", back, false);
+        cdNum(l, a, "استدارة الزوايا", "moon_card_r", 18, 0, 60, "", back, false);
+        cdNum(l, a, "هامش داخلي", "moon_f_pad", fineSteps(Math.round(unit() * 6)), 0, 150, "", back, true);
+        cdNum(l, a, "خارجي: يسار", "moon_f_ml", fineSteps(wsc(10)), 0, 400, "", back, true);
+        cdNum(l, a, "خارجي: يمين", "moon_f_mr", fineSteps(wsc(10)), 0, 400, "", back, true);
+        cdNum(l, a, "خارجي: أعلى", "moon_f_mt", fineSteps(wsc(10)), 0, 400, "", back, true);
+        cdNum(l, a, "خارجي: أسفل", "moon_f_mb", fineSteps(wsc(10)), 0, 400, "", back, true);
+        menu("🌙 القمر", l, a, this::backToGroup);
     }
 
     // ------------------------------------------------------------------ Pre-prayer badge
@@ -5948,7 +6331,175 @@ public class MainActivity extends Activity {
 
     private QuranPlayer quranPlayer;
     private FrameLayout quranView;
-    private TextView qTitle, qAyah, qInfo;
+    private TextView qTitle, qMeta, qAyah, qInfo, qHint;
+    private FrameLayout qMid;
+    private QBar qBar;
+    private int qLastIdx = -1, qLastDur, qWordShown = -2, qAyahNo;
+    private long qDoneMs, qDoneLetters;
+    private String qAyahText = "";
+    private boolean qBism;
+    private String[] qWords = new String[0];
+    private int[] qCum = new int[0];
+
+    /** Thin progress bar for the surah: rounded track, gold gradient fill, soft knob. */
+    private final class QBar extends View {
+        float frac;
+        final android.graphics.Paint pt = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        final android.graphics.RectF r = new android.graphics.RectF();
+
+        QBar() {
+            super(MainActivity.this);
+        }
+
+        int thick() {
+            return Math.max(1, Math.round(prefs.getInt("q_bar_th", 8) * getResources().getDisplayMetrics().density / 2f));
+        }
+
+        @Override protected void onDraw(Canvas c) {
+            int th = thick();
+            float w = getWidth() * Math.max(20, Math.min(100, prefs.getInt("q_bar_w", 90))) / 100f;
+            float x0 = (getWidth() - w) / 2f, y0 = (getHeight() - th) / 2f;
+            int col = wcol("q_bar_col", 0xFFF4C95D);
+            r.set(x0, y0, x0 + w, y0 + th);
+            pt.setShader(null);
+            pt.setColor(withAlpha(Color.WHITE, Math.max(0, Math.min(100, prefs.getInt("q_bar_track", 18))) * 255 / 100));
+            c.drawRoundRect(r, th / 2f, th / 2f, pt);
+            float fx = x0 + w * Math.max(0f, Math.min(1f, frac));
+            if (fx > x0 + 0.5f) {
+                r.set(x0, y0, fx, y0 + th);
+                pt.setShader(new android.graphics.LinearGradient(x0, 0, x0 + w, 0,
+                        new int[]{blend(col, Color.BLACK, 0.35f), col, blend(col, Color.WHITE, 0.35f)}, null,
+                        android.graphics.Shader.TileMode.CLAMP));
+                c.drawRoundRect(r, th / 2f, th / 2f, pt);
+                pt.setShader(null);
+                if (prefs.getBoolean("q_bar_knob", true)) {
+                    pt.setColor(withAlpha(col, 90));
+                    c.drawCircle(fx, y0 + th / 2f, th * 1.4f, pt);
+                    pt.setColor(blend(col, Color.WHITE, 0.5f));
+                    c.drawCircle(fx, y0 + th / 2f, th * 0.75f, pt);
+                }
+            }
+        }
+    }
+
+    private static int blend(int a, int b, float t) {
+        int ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255, br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+        return 0xFF000000 | (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
+    }
+
+    private static String mmss(long ms) {
+        long s = Math.max(0, ms) / 1000;
+        String t = s >= 3600 ? String.format(Locale.US, "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+                : String.format(Locale.US, "%d:%02d", s / 60, s % 60);
+        StringBuilder sb = new StringBuilder();
+        for (char ch : t.toCharArray()) sb.append(ch >= '0' && ch <= '9' ? (char) ('٠' + (ch - '0')) : ch);
+        return sb.toString();
+    }
+
+    private final Runnable qTick = new Runnable() {
+        @Override public void run() {
+            if (!quranRunning || quranPlayer == null) return;
+            try {
+                quranProgress();
+            } catch (Exception e) {
+                AppLog.error("QURAN", "progress failed", e);
+            }
+            handler.postDelayed(this, 120L);
+        }
+    };
+
+    /** Word colouring of the current ayah + times + progress bar, from the audio position. */
+    private void quranProgress() {
+        int idx = quranPlayer.curIndex(), pos = quranPlayer.posMs(), dur = quranPlayer.durMs();
+        if (dur > 0 && idx == qLastIdx) qLastDur = dur;
+        int n = quranPlayer.total();
+        int curLetters = quranPlayer.letters(idx);
+        long rest = 0;
+        for (int i = idx + 1; i < n; i++) rest += quranPlayer.letters(i);
+        long known = qDoneMs + (dur > 0 ? dur : 0), knownL = qDoneLetters + (dur > 0 ? curLetters : 0);
+        double rate = knownL > 0 ? (double) known / knownL : 80.0;
+        long total = qDoneMs + (dur > 0 ? dur : Math.round(curLetters * rate)) + Math.round(rest * rate);
+        long elapsed = qDoneMs + pos;
+        if (qBar != null) {
+            qBar.frac = total > 0 ? (float) elapsed / total : 0f;
+            qBar.invalidate();
+        }
+        if (qInfo != null && prefs.getBoolean("q_times", true)) {
+            String ay = qBism ? "البسملة" : "الآية " + arDigits(qAyahNo);
+            qInfo.setText(ay + "  (" + arDigits(idx + 1) + " من " + arDigits(n) + ")"
+                    + "     ⏱ الآية " + mmss(pos) + " / " + (dur > 0 ? mmss(dur) : "…")
+                    + "     ▸ مضى " + mmss(elapsed) + "     ⌛ بقي ≈ " + mmss(total - elapsed)
+                    + "     ◷ السورة ≈ " + mmss(total));
+        }
+        if (!prefs.getBoolean("q_track", true) || dur <= 0 || qWords.length == 0) return;
+        int all = qCum[qCum.length - 1];
+        float f = Math.max(0f, Math.min(1f, (float) pos / dur + prefs.getInt("q_lead", 0) / 100f));
+        int w = 0;
+        while (w < qWords.length - 1 && qCum[w] < f * all) w++;
+        if (w != qWordShown) {
+            qWordShown = w;
+            paintAyah(w);
+        }
+    }
+
+    private void setAyahWords(String text) {
+        qWords = text.trim().split("\\s+");
+        qCum = new int[qWords.length];
+        int c = 0;
+        for (int i = 0; i < qWords.length; i++) {
+            c += Math.max(1, qWords[i].replaceAll("[\\u064B-\\u065F\\u0670\\u0640\\u06D6-\\u06ED]", "").length());
+            qCum[i] = c;
+        }
+        qWordShown = -2;
+    }
+
+    /** cur < 0: nothing read yet; otherwise words before cur are "read", word cur is highlighted. */
+    private void paintAyah(int cur) {
+        if (qAyah == null) return;
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+        boolean track = prefs.getBoolean("q_track", true);
+        int readC = wcol("q_read_col", 0xFFF4C95D), curC = wcol("q_cur_col", 0xFFFFE9A8), base = wcol("q_text_col", Color.WHITE);
+        for (int i = 0; i < qWords.length; i++) {
+            if (i > 0) sb.append(" ");
+            int st = sb.length();
+            sb.append(qWords[i]);
+            int col = !track || cur < 0 ? base : i < cur ? readC : i == cur ? curC : base;
+            sb.setSpan(new android.text.style.ForegroundColorSpan(col), st, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            if (track && i == cur && prefs.getBoolean("q_cur_glow", true))
+                sb.setSpan(new android.text.style.BackgroundColorSpan(withAlpha(readC, 46)), st, sb.length(),
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        if (!qBism) {
+            int st = sb.length();
+            sb.append("  ﴿").append(arDigits(qAyahNo)).append("﴾");
+            sb.setSpan(new android.text.style.ForegroundColorSpan(0xFFF4C95D), st, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            sb.setSpan(new android.text.style.RelativeSizeSpan(0.8f), st, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        qAyah.setText(sb);
+    }
+
+    /** Largest text size at which the whole ayah fits the middle area (never under the header or the footer). */
+    private void fitAyah() {
+        if (qAyah == null || qMid == null) return;
+        int w = qMid.getWidth() - qAyah.getPaddingLeft() - qAyah.getPaddingRight();
+        int h = qMid.getHeight() - qAyah.getPaddingTop() - qAyah.getPaddingBottom();
+        if (w <= 0 || h <= 0) {
+            qMid.post(this::fitAyah);
+            return;
+        }
+        float max = fs(48) * prefs.getInt("q_text_pct", 100) / 100f, min = fs(12);
+        android.text.TextPaint tp = new android.text.TextPaint(qAyah.getPaint());
+        CharSequence txt = qAyah.getText();
+        float size = max;
+        while (size > min) {
+            tp.setTextSize(size);
+            android.text.StaticLayout sl = new android.text.StaticLayout(txt, tp, w, android.text.Layout.Alignment.ALIGN_CENTER,
+                    1.45f, 0f, false);
+            if (sl.getHeight() <= h) break;
+            size *= 0.93f;
+        }
+        qAyah.setTextSize(TypedValue.COMPLEX_UNIT_PX, Math.max(min, size));
+    }
     private boolean quranRunning, quranReturn;
     private int quranRetry;
     private String quranReciterShown = "";
@@ -6001,7 +6552,7 @@ public class MainActivity extends Activity {
         for (String alt : QuranPlayer.altFolders(r)) bases.add("https://everyayah.com/data/" + alt + "/");
         quranReciterShown = QuranPlayer.reciterName(r);
         quranRunning = true;
-        quranReturn = prefs.getBoolean("quran_return", true) && !resumed && !test;
+        quranReturn = prefs.getInt("quran_after", 0) == 1 && !resumed && !test;
         AppLog.info("QURAN", "start surah " + surah + " " + o.optInt("a") + "-" + o.optInt("b") + " reciter " + r
                 + " returnToApp=" + quranReturn);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
@@ -6017,19 +6568,34 @@ public class MainActivity extends Activity {
         if (railOpen) closeRail(false);
         if (sizeH > 0) applyStage(0, false);
         pauseNativeVideo();
+        qLastIdx = -1;
+        qLastDur = 0;
+        qDoneMs = 0;
+        qDoneLetters = 0;
+        qSurah = surah;
+        qFrom = o.optInt("a", 0);
+        qTo = o.optInt("b", 0);
         buildQuranView("سورة " + SURAHS[surah - 1]);
         float vol = prefs.getInt("quran_vol", 70) / 100f;
         quranPlayer = new QuranPlayer(this, surah, o.optInt("a", 0), o.optInt("b", 0), bases, vol, new QuranPlayer.Cb() {
             @Override
             public void onAyah(int ayah, String text, boolean bismillah, int index, int total) {
                 if (!quranRunning || qAyah == null) return;
-                String shown = bismillah ? text : text + "  ﴿" + arDigits(ayah) + "﴾";
-                qAyah.setText(shown);
-                int len = text.length();
-                qAyah.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(len < 60 ? 46 : len < 120 ? 38 : len < 220 ? 31
-                        : len < 380 ? 25 : len < 600 ? 20 : 16));
-                qInfo.setText((bismillah ? "البسملة" : "الآية " + arDigits(ayah)) + "   •   " + arDigits(index + 1)
-                        + " / " + arDigits(total) + "      OK: إيقاف مؤقت   •   رجوع: إنهاء");
+                if (qLastIdx >= 0 && index != qLastIdx) {
+                    qDoneMs += qLastDur;
+                    qDoneLetters += quranPlayer.letters(qLastIdx);
+                }
+                qLastIdx = index;
+                qLastDur = 0;
+                qAyahNo = ayah;
+                qBism = bismillah;
+                qAyahText = text;
+                setAyahWords(text);
+                paintAyah(-1);
+                fitAyah();
+                if (qMeta != null && quranPlayer != null) qMeta.setText(quranMetaText());
+                handler.removeCallbacks(qTick);
+                handler.post(qTick);
             }
 
             @Override
@@ -6047,43 +6613,160 @@ public class MainActivity extends Activity {
         quranPlayer.start();
     }
 
+    private int qSurah, qFrom, qTo;
+
+    private String quranMetaText() {
+        StringBuilder sb = new StringBuilder("🎙 ").append(quranReciterShown);
+        if (quranPlayer != null) {
+            String rv = quranPlayer.revelation;
+            if ("Meccan".equalsIgnoreCase(rv)) sb.append("   •   مكية");
+            else if ("Medinan".equalsIgnoreCase(rv)) sb.append("   •   مدنية");
+            if (quranPlayer.surahAyahs > 0) {
+                sb.append("   •   ").append(arDigits(quranPlayer.surahAyahs)).append(" آية");
+                int a = Math.max(1, qFrom), b = qTo <= 0 ? quranPlayer.surahAyahs : Math.min(qTo, quranPlayer.surahAyahs);
+                if (a > 1 || b < quranPlayer.surahAyahs) sb.append("   •   من ").append(arDigits(a)).append(" إلى ").append(arDigits(b));
+            }
+        }
+        return sb.toString();
+    }
+
     private void buildQuranView(String title) {
         quranView = new FrameLayout(this);
-        quranView.setBackgroundColor(0xF2040A07);
+        int bga = Math.max(50, Math.min(100, prefs.getInt("q_bg_alpha", 96)));
+        quranView.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{withAlpha(0xFF06140E, bga * 255 / 100), withAlpha(0xFF020604, bga * 255 / 100)}));
         quranView.setClickable(true);
         quranView.setElevation(dp(30));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(dp(24), dp(12), dp(24), 0);
+        quranView.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
         qTitle = new TextView(this);
         qTitle.setTypeface(tf(true));
-        qTitle.setTextColor(0xFFF4C95D);
-        qTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(30));
+        qTitle.setTextColor(wcol("q_title_col", 0xFFF4C95D));
+        qTitle.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(30) * prefs.getInt("q_title_pct", 100) / 100f);
         qTitle.setGravity(Gravity.CENTER);
         qTitle.setTextDirection(View.TEXT_DIRECTION_RTL);
-        qTitle.setText(title + "\n" + quranReciterShown);
-        qTitle.setPadding(dp(20), dp(14), dp(20), 0);
-        quranView.addView(qTitle, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        qTitle.setIncludeFontPadding(false);
+        qTitle.setText("۞  " + title + "  ۞");
+        col.addView(qTitle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        qMeta = new TextView(this);
+        qMeta.setTypeface(tf(false));
+        qMeta.setTextColor(0xCCFFFFFF);
+        qMeta.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(15) * prefs.getInt("q_title_pct", 100) / 100f);
+        qMeta.setGravity(Gravity.CENTER);
+        qMeta.setTextDirection(View.TEXT_DIRECTION_RTL);
+        qMeta.setSingleLine(true);
+        qMeta.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        qMeta.setText(quranMetaText());
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        mp.topMargin = dp(6);
+        col.addView(qMeta, mp);
+
+        View line = new View(this);
+        line.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0x00F4C95D, 0xCCF4C95D, 0x00F4C95D}));
+        LinearLayout.LayoutParams lnp = new LinearLayout.LayoutParams(Math.round(sizeW * 0.55f), Math.max(1, dp(1)));
+        lnp.topMargin = dp(10);
+        lnp.bottomMargin = dp(6);
+        col.addView(line, lnp);
+
+        qMid = new FrameLayout(this);                                  // the ayah gets all the space left: no overlap
         qAyah = new TextView(this);
         qAyah.setTypeface(tf(true));
-        qAyah.setTextColor(Color.WHITE);
+        qAyah.setTextColor(wcol("q_text_col", Color.WHITE));
         qAyah.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(38));
         qAyah.setGravity(Gravity.CENTER);
         qAyah.setTextDirection(View.TEXT_DIRECTION_RTL);
         qAyah.setLineSpacing(0f, 1.45f);
+        qAyah.setPadding(dp(16), dp(4), dp(16), dp(4));
         qAyah.setText("جارٍ التجهيز…");
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(Math.round(sizeW * 0.88f),
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        quranView.addView(qAyah, lp);
+        qMid.addView(qAyah, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        col.addView(qMid, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
         qInfo = new TextView(this);
         qInfo.setTypeface(tf(false));
-        qInfo.setTextColor(0xAAFFFFFF);
+        qInfo.setTextColor(0xCCFFFFFF);
         qInfo.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(15));
         qInfo.setGravity(Gravity.CENTER);
         qInfo.setTextDirection(View.TEXT_DIRECTION_RTL);
-        qInfo.setPadding(dp(20), 0, dp(20), dp(16));
-        quranView.addView(qInfo, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        qInfo.setSingleLine(true);
+        qInfo.setVisibility(prefs.getBoolean("q_times", true) ? View.VISIBLE : View.GONE);
+        col.addView(qInfo, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        qHint = new TextView(this);
+        qHint.setTypeface(tf(false));
+        qHint.setTextColor(0x88FFFFFF);
+        qHint.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(12));
+        qHint.setGravity(Gravity.CENTER);
+        qHint.setText("OK: إيقاف مؤقت / متابعة   •   رجوع: إنهاء القراءة");
+        qHint.setVisibility(prefs.getBoolean("q_hint", true) ? View.VISIBLE : View.GONE);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        hp.topMargin = dp(3);
+        col.addView(qHint, hp);
+
+        qBar = new QBar();
+        qBar.setVisibility(prefs.getBoolean("q_bar", true) ? View.VISIBLE : View.GONE);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                qBar.thick() * 3 + dp(4));
+        bp.topMargin = dp(4);
+        bp.bottomMargin = fine("q_bar_mb", dp(10));
+        col.addView(qBar, bp);
+
         root.addView(quranView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    /** Re-applies the look settings while a reading is on screen. */
+    private final Runnable quranLookLive = () -> {
+        if (!quranRunning || quranView == null) return;
+        root.removeView(quranView);
+        buildQuranView("سورة " + SURAHS[Math.max(1, Math.min(114, qSurah)) - 1]);
+        setAyahWords(qAyahText);
+        paintAyah(qWordShown >= 0 ? qWordShown : -1);
+        fitAyah();
+    };
+
+    private void showQuranLook() {
+        styleLive = quranLookLive;
+        final List<String> l = new ArrayList<>();
+        final List<Runnable> a = new ArrayList<>();
+        final Runnable back = this::showQuranLook;
+        l.add("— شريط التقدم أسفل الشاشة —");
+        a.add(back);
+        cdToggle(l, a, "إظهار شريط التقدم", "q_bar", true, back);
+        cdColor(l, a, "لون الشريط (تلقائي = ذهبي)", "q_bar_col", 0, WX_COL_NAMES, back);
+        cdNum(l, a, "سماكة الشريط", "q_bar_th", 8, 1, 40, "", back, false);
+        cdNum(l, a, "عرض الشريط", "q_bar_w", 90, 20, 100, "%", back, false);
+        cdNum(l, a, "وضوح المسار الفارغ", "q_bar_track", 18, 0, 100, "%", back, false);
+        cdToggle(l, a, "نقطة مضيئة في رأس الشريط", "q_bar_knob", true, back);
+        cdNum(l, a, "البعد عن أسفل الشاشة", "q_bar_mb", fineSteps(dp(10)), 0, 200, "", back, true);
+        l.add("— نص الآيات —");
+        a.add(back);
+        cdToggle(l, a, "تتبّع وتلوين الكلمات مع التلاوة", "q_track", true, back);
+        cdColor(l, a, "لون المقروء (تلقائي = ذهبي)", "q_read_col", 0, WX_COL_NAMES, back);
+        cdColor(l, a, "لون الكلمة الحالية", "q_cur_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "إضاءة خفيفة خلف الكلمة الحالية", "q_cur_glow", true, back);
+        cdColor(l, a, "لون غير المقروء (تلقائي = أبيض)", "q_text_col", 0, WX_COL_NAMES, back);
+        cdNum(l, a, "أقصى حجم لنص الآية", "q_text_pct", 100, 40, 250, "%", back, false);
+        cdNum(l, a, "تقديم/تأخير التلوين عن الصوت (سالب = أبطأ)", "q_lead", 0, -30, 30, "%", back, false);
+        l.add("— العنوان والمعلومات —");
+        a.add(back);
+        cdNum(l, a, "حجم اسم السورة والقارئ", "q_title_pct", 100, 50, 250, "%", back, false);
+        cdColor(l, a, "لون اسم السورة", "q_title_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "إظهار الأوقات (الآية، مضى، بقي)", "q_times", true, back);
+        cdToggle(l, a, "إظهار تلميح الأزرار", "q_hint", true, back);
+        cdNum(l, a, "عتامة الخلفية", "q_bg_alpha", 96, 50, 100, "%", back, false);
+        menu("🎨 مظهر صفحة القرآن", l, a, this::showQuranSettings);
     }
 
     private void toggleQuranPause() {
@@ -6091,22 +6774,26 @@ public class MainActivity extends Activity {
         if (quranPlayer.isPaused()) quranPlayer.resume();
         else quranPlayer.pause();
         if (qTitle != null) qTitle.setAlpha(quranPlayer.isPaused() ? 0.5f : 1f);
+        if (qHint != null) qHint.setText(quranPlayer.isPaused() ? "⏸ متوقف مؤقتاً — OK للمتابعة" : "OK: إيقاف مؤقت / متابعة   •   رجوع: إنهاء القراءة");
         toast(quranPlayer.isPaused() ? "إيقاف مؤقت" : "متابعة");
     }
 
     private void stopQuran(boolean returnToApp) {
         if (!quranRunning) return;
         quranRunning = false;
+        handler.removeCallbacks(qTick);
         if (quranPlayer != null) quranPlayer.stop();
         quranPlayer = null;
         if (quranView != null) {
             root.removeView(quranView);
             quranView = null;
         }
+        qBar = null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         AppLog.info("QURAN", "stopped; returning to previous app: " + (returnToApp && quranReturn));
         resumeNativeVideo();
         if (returnToApp && quranReturn) moveTaskToBack(true);
+        else if (sizeH > 0) applyStage(0, false);                      // the launcher's main page
         syncAfterIdle();
     }
 
@@ -6211,11 +6898,14 @@ public class MainActivity extends Activity {
         }, back));
         l.add("🔊  مستوى صوت القرآن:  " + prefs.getInt("quran_vol", 70) + "%");
         a.add(() -> numberDialog("مستوى صوت القرآن", "quran_vol", 70, 5, 100, "%", null, null, back, back));
-        l.add("↩  العودة للتطبيق السابق بعد الانتهاء:  " + onOff(prefs.getBoolean("quran_return", true)));
-        a.add(() -> {
-            prefs.edit().putBoolean("quran_return", !prefs.getBoolean("quran_return", true)).apply();
-            showQuranSettings();
-        });
+        l.add("↩  بعد انتهاء القراءة:  " + (prefs.getInt("quran_after", 0) == 1 ? "العودة للتطبيق السابق" : "الصفحة الرئيسية للانشر"));
+        a.add(() -> choice("بعد انتهاء القراءة", new String[]{"الصفحة الرئيسية للانشر", "العودة للتطبيق/الفيديو السابق"},
+                prefs.getInt("quran_after", 0), i -> {
+                    prefs.edit().putInt("quran_after", i).apply();
+                    showQuranSettings();
+                }, back));
+        l.add("🎨  مظهر صفحة القرآن (تتبّع الكلمات، شريط التقدم، الألوان…)");
+        a.add(this::showQuranLook);
         l.add("🔗  رابط قارئ مخصص (مجلد ملفات 001001.mp3 …):  "
                 + (prefs.getString("quran_custom_base", "").isEmpty() ? "غير محدد" : "محدد"));
         a.add(() -> promptText("رابط المجلد الذي فيه ملفات الآيات (SSSAAA.mp3)", "https://…/folder/",
@@ -6437,7 +7127,7 @@ public class MainActivity extends Activity {
                     AppLog.error("GUARD", "failed", e);
                 }
             }
-            handler.postDelayed(this, 12_000L);
+            handler.postDelayed(this, 3_000L);
         }
     };
 
@@ -6445,9 +7135,9 @@ public class MainActivity extends Activity {
         if (in == null) return;
         if (in.getBooleanExtra("boot_guard", false)) {
             in.removeExtra("boot_guard");
-            guardUntil = System.currentTimeMillis() + 4 * 60_000L;
+            guardUntil = System.currentTimeMillis() + 3 * 60_000L;
             handler.removeCallbacks(guardTick);
-            handler.postDelayed(guardTick, 12_000L);
+            handler.postDelayed(guardTick, 1_500L);
         }
         long qid = in.getLongExtra("quran", -1L);
         if (qid >= 0) {
@@ -7589,7 +8279,8 @@ public class MainActivity extends Activity {
         l.add("— الحرارة —");
         a.add(back);
         cdNum(l, a, "حجم خط الحرارة", "w_temp_pct", 100, 40, 300, "%", back, false);
-        cdColor(l, a, "لون الحرارة", "w_temp_col", 0, WX_COL_NAMES, back);
+        cdToggle(l, a, "تلوين الحرارة حسب الدرجة (أزرق بارد ← أحمر حار)", "w_heat", true, back);
+        cdColor(l, a, "لون ثابت للحرارة (تلقائي = حسب الدرجة)", "w_temp_col", 0, WX_COL_NAMES, back);
         cdToggle(l, a, "الحرارة عريضة", "w_temp_bold", true, back);
         l.add("— الأيقونة والتفاصيل —");
         a.add(back);

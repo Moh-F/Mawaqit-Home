@@ -111,6 +111,38 @@ final class QuranPlayer {
         return items.size();
     }
 
+    /** Revelation place from the text source ("Meccan" / "Medinan"), and the surah's ayah count. */
+    String revelation = "";
+    int surahAyahs;
+
+    int curIndex() {
+        return curIdx;
+    }
+
+    /** Playback position inside the current ayah (ms), 0 when not playing. */
+    int posMs() {
+        try {
+            return cur != null && curPlaying ? cur.getCurrentPosition() : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** Length of the current ayah's audio (ms), 0 when unknown. */
+    int durMs() {
+        try {
+            return cur != null && curPlaying ? Math.max(0, cur.getDuration()) : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** Letters of an item (no diacritics), used to estimate how long the rest of the surah takes. */
+    int letters(int i) {
+        if (i < 0 || i >= items.size()) return 0;
+        return norm(items.get(i).text).replaceAll("\\s+", "").length();
+    }
+
     // -------------------------------------------------------------- text
 
     private static String norm(String s) {
@@ -154,7 +186,10 @@ final class QuranPlayer {
     }
 
     private void build(String body) throws Exception {
-        JSONArray ar = new JSONObject(body).getJSONObject("data").getJSONArray("ayahs");
+        JSONObject data = new JSONObject(body).getJSONObject("data");
+        revelation = data.optString("revelationType", "");
+        JSONArray ar = data.getJSONArray("ayahs");
+        surahAyahs = ar.length();
         int last = ar.length();
         int a = Math.max(1, from), z = to <= 0 ? last : Math.min(last, to);
         if (a > last) a = 1;
