@@ -7826,7 +7826,7 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-        annReturn = prefs.getBoolean("adhan_return", true) && !resumed && !test && HomeWatch.previousIsRealApp();
+        annReturn = prefs.getBoolean("adhan_return", true) && !resumed && HomeWatch.previousIsRealApp();
         AppLog.info("ADHAN", "previous app: " + HomeWatch.lastForeign + " -> return afterwards: " + annReturn);
         if (quranRunning) stopQuran(false);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
@@ -7888,7 +7888,7 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-        adhanReturn = annReturn != null ? annReturn : prefs.getBoolean("adhan_return", true) && !resumed && !test
+        adhanReturn = annReturn != null ? annReturn : prefs.getBoolean("adhan_return", true) && !resumed
                 && HomeWatch.previousIsRealApp();
         annReturn = null;
         hideAnnounce();
@@ -10168,7 +10168,14 @@ public class MainActivity extends Activity {
         try {
             final android.media.MediaPlayer mp = new android.media.MediaPlayer();
             vmp[slot] = mp;
-            mp.setDataSource(url);
+            File cached = vCacheFile(url);
+            if (url.startsWith("http") && cached.length() > 100_000L) {
+                mp.setDataSource(cached.getAbsolutePath());               // played from the device: no re-download
+                cached.setLastModified(System.currentTimeMillis());
+            } else {
+                mp.setDataSource(url);
+                if (url.startsWith("http")) vCacheFetch(url);            // saved once, full quality, for next time
+            }
             mp.setSurface(new android.view.Surface(vst[slot]));
             mp.setLooping(false);
             mp.setVolume(prefs.getInt("bg_vol", 0) / 100f, prefs.getInt("bg_vol", 0) / 100f);
@@ -10220,6 +10227,76 @@ public class MainActivity extends Activity {
             AppLog.error("VIDEO", "native load failed", e);
             vxf = false;
             if (vcur < 0) videoPlaying = "";
+        }
+    }
+
+    // ---- background video cache (original resolution, kept on the device)
+
+    private static final java.util.Set<String> vFetching = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+    private File vCacheDir() {
+        File d = new File(getFilesDir(), "vcache");
+        d.mkdirs();
+        return d;
+    }
+
+    private File vCacheFile(String url) {
+        String h;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] b = md.digest(url.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 10; i++) sb.append(String.format(Locale.US, "%02x", b[i]));
+            h = sb.toString();
+        } catch (Exception e) {
+            h = Integer.toHexString(url.hashCode());
+        }
+        return new File(vCacheDir(), h + ".mp4");
+    }
+
+    private void vCacheFetch(final String url) {
+        if (!vFetching.add(url)) return;
+        new Thread(() -> {
+            File out = vCacheFile(url), tmp = new File(out.getPath() + ".part");
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(30000);
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) MawaqitHome");
+                try (java.io.InputStream in = c.getInputStream(); java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp)) {
+                    byte[] b = new byte[65536];
+                    int n;
+                    while ((n = in.read(b)) > 0) fo.write(b, 0, n);
+                }
+                if (tmp.length() > 100_000L && tmp.renameTo(out)) {
+                    AppLog.info("VIDEO", "saved on device (" + (out.length() / 1024 / 1024) + " MB) " + url);
+                    vCacheTrim(out);
+                } else tmp.delete();
+            } catch (Exception e) {
+                tmp.delete();
+                AppLog.error("VIDEO", "cache download failed " + url, e);
+            } finally {
+                vFetching.remove(url);
+            }
+        }).start();
+    }
+
+    /** Keeps the cache small: newest files first, at most 8 videos and 700 MB, and always leaves 500 MB free. */
+    private void vCacheTrim(File keep) {
+        File[] fs = vCacheDir().listFiles((d, n) -> n.endsWith(".mp4"));
+        if (fs == null) return;
+        Arrays.sort(fs, (x, y) -> Long.compare(y.lastModified(), x.lastModified()));
+        long total = 0;
+        int count = 0;
+        for (File f : fs) {
+            total += f.length();
+            count++;
+            boolean lowSpace = getFilesDir().getUsableSpace() < 500L * 1024 * 1024;
+            if (!f.equals(keep) && (count > 8 || total > 700L * 1024 * 1024 || lowSpace)) {
+                total -= f.length();
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            }
         }
     }
 
