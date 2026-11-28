@@ -5012,8 +5012,14 @@ public class MainActivity extends Activity {
         }
         long ms = tgt.getTimeInMillis() - t.getTimeInMillis();
         long days = ms / 86_400_000L, hrs = ms / 3_600_000L % 24, mins = ms / 60_000L % 60, secs = ms / 1000L % 60;
-        if (!full) return (days * 24 + hrs) + " ساعة  " + mins + " دقيقة";
-        return (months > 0 ? months + " شهر  " : "") + days + " يوم\n" + hrs + " ساعة  " + mins + " دقيقة  " + secs + " ثانية";
+        if (!full) return pad2(days * 24 + hrs) + " ساعة  " + pad2(mins) + " دقيقة";
+        return (months > 0 ? months + " شهر  " : "") + days + " يوم\n" + pad2(hrs) + " ساعة  " + pad2(mins) + " دقيقة  "
+                + pad2(secs) + " ثانية";
+    }
+
+    /** Two digits always ("07"), so a count never changes its width while it runs. */
+    private static String pad2(long v) {
+        return v < 10 ? "0" + v : String.valueOf(v);
     }
 
     private long nextPrayer(int idx) {
@@ -6574,14 +6580,15 @@ public class MainActivity extends Activity {
         float f = dur > 0 ? Math.min(1f, (float) pos / dur) : 0f;
         if (qBar != null) {
             qBar.frac = (azIdx + (azRep - 1 + f) / azReps) / Math.max(1, n);
+            qBar.lStart = (n - azIdx) + "";
+            qBar.lEnd = azIdx + "/" + n;
             qBar.invalidate();
         }
         if (qInfo != null && prefs.getBoolean("q_times", true) && azIdx < n) {
             int c = azItems.optJSONObject(azIdx).optInt("c", 1);
-            qInfo.setText("الذكر " + arDigits(azIdx + 1) + " من " + arDigits(n)
-                    + (c > 1 ? "     🔁 " + arDigits(azRep) + " من " + arDigits(azReps)
-                    + (c > azReps ? "  (يُقال " + arDigits(c) + " مرة)" : "") : "")
-                    + "     ⏱ " + mmss(pos) + " / " + (dur > 0 ? mmss(dur) : "…"));
+            qInfo.setText(tabDigits("الذكر " + (azIdx + 1) + " من " + n
+                    + (c > 1 ? "     🔁 " + azRep + " من " + azReps + (c > azReps ? "  (يُقال " + c + " مرة)" : "") : "")
+                    + "     ⏱ " + hms(pos) + " / " + (dur > 0 ? hms(dur) : "--:--")));
         }
         trackWords(pos, dur);
     }
@@ -6918,6 +6925,32 @@ public class MainActivity extends Activity {
     /** Thin progress bar for the surah: rounded track, gold gradient fill, soft knob. */
     private final class QBar extends View {
         float frac;
+        String lStart = "", lEnd = "";
+        final android.graphics.Paint tp = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+        /** Draws text with every digit in a cell of equal width, so a running time never moves. */
+        float fixedWidth(String s) {
+            float cell = 0f, w = 0f;
+            for (char d = '0'; d <= '9'; d++) cell = Math.max(cell, tp.measureText(String.valueOf(d)));
+            for (int i = 0; i < s.length(); i++) {
+                char ch = s.charAt(i);
+                w += ch >= '0' && ch <= '9' ? cell : tp.measureText(String.valueOf(ch));
+            }
+            return w;
+        }
+
+        void drawFixed(Canvas c, String s, float cx, float y) {
+            float cell = 0f;
+            for (char d = '0'; d <= '9'; d++) cell = Math.max(cell, tp.measureText(String.valueOf(d)));
+            float x = cx - fixedWidth(s) / 2f;
+            for (int i = 0; i < s.length(); i++) {
+                String ch = String.valueOf(s.charAt(i));
+                boolean dg = s.charAt(i) >= '0' && s.charAt(i) <= '9';
+                float cw = dg ? cell : tp.measureText(ch);
+                c.drawText(ch, x + (cw - tp.measureText(ch)) / 2f, y, tp);
+                x += cw;
+            }
+        }
         final android.graphics.Paint pt = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         final android.graphics.RectF r = new android.graphics.RectF();
 
@@ -6931,17 +6964,34 @@ public class MainActivity extends Activity {
 
         @Override protected void onDraw(Canvas c) {
             int th = thick();
-            float w = getWidth() * Math.max(20, Math.min(100, prefs.getInt("q_bar_w", 90))) / 100f;
-            float x0 = (getWidth() - w) / 2f, y0 = (getHeight() - th) / 2f;
             int col = wcol("q_bar_col", 0xFFF4C95D);
+            boolean rtl = prefs.getBoolean("q_bar_rtl", true), labels = prefs.getBoolean("q_bar_labels", true);
+            float full = getWidth() * Math.max(20, Math.min(100, prefs.getInt("q_bar_w", 90))) / 100f;
+            float lab = 0f;
+            if (labels) {
+                tp.setTypeface(tf(true));
+                tp.setTextSize(fs(14) * Math.max(50, Math.min(250, prefs.getInt("q_bar_lsz", 100))) / 100f);
+                tp.setColor(blend(col, Color.WHITE, 0.25f));
+                lab = fixedWidth("-0:00:00") + dp(12);
+            }
+            float w = Math.max(dp(40), full - 2 * lab);
+            float x0 = (getWidth() - w) / 2f, y0 = (getHeight() - th) / 2f;
+            if (labels) {
+                float ty = getHeight() / 2f - (tp.descent() + tp.ascent()) / 2f;
+                // the bar's start (right side in Arabic) counts down, its end counts up
+                drawFixed(c, rtl ? lStart : lEnd, x0 + w + lab / 2f, ty);
+                drawFixed(c, rtl ? lEnd : lStart, x0 - lab / 2f, ty);
+            }
             r.set(x0, y0, x0 + w, y0 + th);
             pt.setShader(null);
             pt.setColor(withAlpha(Color.WHITE, Math.max(0, Math.min(100, prefs.getInt("q_bar_track", 18))) * 255 / 100));
             c.drawRoundRect(r, th / 2f, th / 2f, pt);
-            float fx = x0 + w * Math.max(0f, Math.min(1f, frac));
-            if (fx > x0 + 0.5f) {
-                r.set(x0, y0, fx, y0 + th);
-                pt.setShader(new android.graphics.LinearGradient(x0, 0, x0 + w, 0,
+            float fr = Math.max(0f, Math.min(1f, frac));
+            float fx = rtl ? x0 + w - w * fr : x0 + w * fr;
+            if (fr > 0.002f) {
+                if (rtl) r.set(fx, y0, x0 + w, y0 + th);
+                else r.set(x0, y0, fx, y0 + th);
+                pt.setShader(new android.graphics.LinearGradient(rtl ? x0 + w : x0, 0, rtl ? x0 : x0 + w, 0,
                         new int[]{blend(col, Color.BLACK, 0.35f), col, blend(col, Color.WHITE, 0.35f)}, null,
                         android.graphics.Shader.TileMode.CLAMP));
                 c.drawRoundRect(r, th / 2f, th / 2f, pt);
@@ -6959,6 +7009,13 @@ public class MainActivity extends Activity {
     private static int blend(int a, int b, float t) {
         int ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255, br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
         return 0xFF000000 | (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
+    }
+
+    /** Latin digits, always the same width: 03:07 or 1:03:07. */
+    private static String hms(long ms) {
+        long s = Math.max(0, ms) / 1000;
+        return s >= 3600 ? String.format(Locale.US, "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+                : String.format(Locale.US, "%02d:%02d", s / 60, s % 60);
     }
 
     private static String mmss(long ms) {
@@ -6997,14 +7054,15 @@ public class MainActivity extends Activity {
         long elapsed = qDoneMs + pos;
         if (qBar != null) {
             qBar.frac = total > 0 ? (float) elapsed / total : 0f;
+            qBar.lStart = "-" + hms(total - elapsed);
+            qBar.lEnd = hms(elapsed);
             qBar.invalidate();
         }
         if (qInfo != null && prefs.getBoolean("q_times", true)) {
-            String ay = qBism ? "البسملة" : "الآية " + arDigits(qAyahNo);
-            qInfo.setText(ay + "  (" + arDigits(idx + 1) + " من " + arDigits(n) + ")"
-                    + "     ⏱ الآية " + mmss(pos) + " / " + (dur > 0 ? mmss(dur) : "…")
-                    + "     ▸ مضى " + mmss(elapsed) + "     ⌛ بقي ≈ " + mmss(total - elapsed)
-                    + "     ◷ السورة ≈ " + mmss(total));
+            int all = quranPlayer.surahAyahs > 0 ? quranPlayer.surahAyahs : n;
+            String ay = qBism ? "البسملة" : "الآية " + qAyahNo + " من " + all;
+            qInfo.setText(tabDigits(ay + "     ▸ مضى " + hms(elapsed) + "     ⌛ بقي ≈ " + hms(total - elapsed)
+                    + "     ◷ زمن السورة ≈ " + hms(total)));
         }
         trackWords(pos, dur);
     }
@@ -7201,6 +7259,25 @@ public class MainActivity extends Activity {
     }
 
     private int qSurah, qFrom, qTo;
+    private Typeface qTfCache;
+    private int qTfIdx = -1;
+
+    /** The ayah font can differ from the launcher's font (0 = same as the launcher). */
+    private Typeface quranTf() {
+        int f = prefs.getInt("q_font", 4);
+        boolean bold = prefs.getBoolean("q_font_bold", false);
+        if (f <= 0 || f >= FONT_FILES.length) return tf(true);
+        int key = f * 2 + (bold ? 1 : 0);
+        if (qTfCache == null || qTfIdx != key) {
+            try {
+                qTfCache = Typeface.createFromAsset(getAssets(), "fonts/" + FONT_FILES[f][bold ? 1 : 0] + ".ttf");
+                qTfIdx = key;
+            } catch (Throwable t) {
+                return tf(true);
+            }
+        }
+        return qTfCache;
+    }
 
     private String quranMetaText() {
         StringBuilder sb = new StringBuilder("🎙 ").append(quranReciterShown);
@@ -7266,7 +7343,7 @@ public class MainActivity extends Activity {
 
         qMid = new FrameLayout(this);                                  // the ayah gets all the space left: no overlap
         qAyah = new TextView(this);
-        qAyah.setTypeface(tf(true));
+        qAyah.setTypeface(quranTf());
         qAyah.setTextColor(wcol("q_text_col", Color.WHITE));
         qAyah.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs(38));
         qAyah.setGravity(Gravity.CENTER);
@@ -7304,7 +7381,7 @@ public class MainActivity extends Activity {
         qBar = new QBar();
         qBar.setVisibility(prefs.getBoolean("q_bar", true) ? View.VISIBLE : View.GONE);
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                qBar.thick() * 3 + dp(4));
+                Math.max(qBar.thick() * 3 + dp(4), Math.round(fs(14) * prefs.getInt("q_bar_lsz", 100) / 100f * 1.6f)));
         bp.topMargin = dp(4);
         bp.bottomMargin = fine("q_bar_mb", dp(10));
         col.addView(qBar, bp);
@@ -7336,10 +7413,22 @@ public class MainActivity extends Activity {
         cdNum(l, a, "سماكة الشريط", "q_bar_th", 8, 1, 40, "", back, false);
         cdNum(l, a, "عرض الشريط", "q_bar_w", 90, 20, 100, "%", back, false);
         cdNum(l, a, "وضوح المسار الفارغ", "q_bar_track", 18, 0, 100, "%", back, false);
-        cdToggle(l, a, "نقطة مضيئة في رأس الشريط", "q_bar_knob", true, back);
+        cdToggle(l, a, "نقطة مضيئة في رأس الشريط (موضع القراءة)", "q_bar_knob", true, back);
+        cdToggle(l, a, "اتجاه الشريط من اليمين لليسار", "q_bar_rtl", true, back);
+        cdToggle(l, a, "الوقت على طرفي الشريط (بداية: الباقي، نهاية: المنقضي)", "q_bar_labels", true, back);
+        cdNum(l, a, "حجم خط وقت الشريط", "q_bar_lsz", 100, 50, 250, "%", back, false);
         cdNum(l, a, "البعد عن أسفل الشاشة", "q_bar_mb", fineSteps(dp(10)), 0, 200, "", back, true);
         l.add("— نص الآيات —");
         a.add(back);
+        final String[] qfn = FONT_NAMES.clone();
+        qfn[0] = "نفس خط اللانشر";
+        l.add("🔤  خط الآيات:  " + qfn[Math.max(0, Math.min(qfn.length - 1, prefs.getInt("q_font", 4)))]);
+        a.add(() -> choice("خط الآيات (مستقل عن خط اللانشر)", qfn, prefs.getInt("q_font", 4), i -> {
+            prefs.edit().putInt("q_font", i).apply();
+            runStyleLive();
+            back.run();
+        }, back));
+        cdToggle(l, a, "خط الآيات عريض", "q_font_bold", false, back);
         cdToggle(l, a, "تتبّع وتلوين الكلمات مع التلاوة", "q_track", true, back);
         cdColor(l, a, "لون المقروء (تلقائي = ذهبي)", "q_read_col", 0, WX_COL_NAMES, back);
         cdColor(l, a, "لون الكلمة الحالية", "q_cur_col", 0, WX_COL_NAMES, back);
@@ -9533,6 +9622,7 @@ public class MainActivity extends Activity {
 
     private void applyPageCss() {
         StringBuilder css = new StringBuilder();
+        css.append("html,body,body *{font-variant-numeric:tabular-nums!important;font-feature-settings:'tnum' 1!important}");
         int pf = prefs.getInt("font", 0);
         if (pf > 0 && pf < FONT_FILES.length) {
             css.append("@font-face{font-family:'MHF';font-weight:400;src:url('/__mhfont/")
