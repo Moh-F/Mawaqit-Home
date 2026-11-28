@@ -27,6 +27,11 @@ public class HomeWatch extends AccessibilityService {
             "com.google.android.leanbacklauncher", "com.android.tv.launcher", "com.google.android.tungsten.setupwraith"};
 
     private static final Set<String> launchers = new HashSet<>();
+    /** Activity classes that ARE the home screen (settings, app lists etc. of the same launcher are left alone). */
+    private static final Set<String> homeClasses = new HashSet<>();
+    private static final String[] KNOWN_HOME = {"com.amazon.tv.launcher.ui.HomeActivity_vNext",
+            "com.amazon.tv.launcher.ui.HomeActivity", "com.google.android.apps.tv.launcherx.home.HomeActivity",
+            "com.google.android.tvlauncher.MainActivity", "com.google.android.leanbacklauncher.MainActivity"};
 
     /** Last app (not us, not the system UI) whose window came to the front, and whether the service is running. */
     static volatile String lastForeign;
@@ -99,14 +104,16 @@ public class HomeWatch extends AccessibilityService {
         AppLog.init(this);
         launchers.clear();
         for (String k : KNOWN) launchers.add(k);
+        for (String k : KNOWN_HOME) homeClasses.add(k);
         try {
             Intent h = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
             List<ResolveInfo> l = getPackageManager().queryIntentActivities(h, 0);
             for (ResolveInfo r : l) {
                 String p = r.activityInfo != null ? r.activityInfo.packageName : null;
                 if (p == null || p.equals(getPackageName()) || p.equals("com.android.settings")
-                        || p.contains("setupwizard") || p.contains("provision")) continue;
+                        || p.contains("setupwizard") || p.contains("provision") || p.contains("settings")) continue;
                 launchers.add(p);
+                homeClasses.add(r.activityInfo.name);
             }
         } catch (Exception ignored) {
         }
@@ -124,7 +131,9 @@ public class HomeWatch extends AccessibilityService {
         if (!ps.equals(getPackageName()) && !ps.equals("com.android.systemui") && !ps.contains("inputmethod")
                 && !ps.contains(".hud")) lastForeign = ps;
         if (!launchers.contains(ps)) return;
-        bringBack(pkg.toString());
+        CharSequence cls = e.getClassName();
+        if (cls == null || !homeClasses.contains(cls.toString())) return;   // e.g. the launcher's settings: leave it
+        bringBack(ps);
     }
 
     private void bringBack(String why) {

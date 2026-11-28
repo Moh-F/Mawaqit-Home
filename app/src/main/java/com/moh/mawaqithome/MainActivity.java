@@ -780,7 +780,7 @@ public class MainActivity extends Activity {
             + "var p=document.querySelector('.prayers');"
             + "function iq(){var all=document.querySelectorAll('body *');for(var i=0;i<all.length;i++){var e=all[i];"
             + "if(e.children.length>0)continue;var t=(e.textContent||'').trim();if(!t||t.length>60)continue;"
-            + "if(/(الإقامة|الاقامة|إقامة|اقامة|iqama|iqamah)/i.test(t)&&vis(e)){var f=parseFloat(getComputedStyle(e).fontSize)||0;"
+            + "if(/(الإقامة|الاقامة|إقامة|اقامة|iqama|iqamah|الأذان|الآذان|الاذان|أذان|اذان|adhan|athan|azan)/i.test(t)&&vis(e)){var f=parseFloat(getComputedStyle(e).fontSize)||0;"
             + "if(f>=36)return true;}}return false;}"
             + "if(!shown(p))return '0:'+cover;return iq()?'2':'1';})()";
 
@@ -800,10 +800,16 @@ public class MainActivity extends Activity {
         }
     };
 
+    /** Cards (weather, countdowns, moon) step aside while the adhan / iqama is on screen. */
+    private boolean cardsVisible() {
+        if (!prefs.getBoolean("w_hide_adhan", true)) return true;
+        return pageMain && !adhanRunning && iqView == null && annView == null;
+    }
+
     private void applyWeatherVis(boolean animate) {
         applyCdVis(animate);
         if (weatherCard == null || !prefs.getBoolean("w_show", true)) return;
-        boolean visible = (pageMain || !prefs.getBoolean("w_hide_adhan", true));
+        boolean visible = cardsVisible();
         int pcl = prefs.getInt("sv_clear", 0);
         float full = (stage >= 1 && stage <= 2 && pcl > 0) ? 1f - pcl / 100f : 1f;
         weatherCard.animate().alpha(visible ? full : 0f).setDuration(animate ? ms(600L) : 0L).start();
@@ -4309,6 +4315,8 @@ public class MainActivity extends Activity {
         final List<Runnable> a = new ArrayList<>();
         l.add("🕌  الأذان وصوت المؤذن (وتنبيه قبل الصلاة):  " + onOff(prefs.getBoolean("adhan_on", false)));
         a.add(this::showAdhanSettings);
+        l.add("▶  استمع إلى القرآن الآن");
+        a.add(this::quranNow);
         l.add("📖  القرآن الكريم (جدولة القراءة آية بآية):  "
                 + onOff(prefs.getBoolean("quran_on", true) && QuranSched.items(prefs).length() > 0));
         a.add(this::showQuranSettings);
@@ -4375,6 +4383,15 @@ public class MainActivity extends Activity {
             } else {
                 prefs.edit().putBoolean("home_watch", !prefs.getBoolean("home_watch", true)).apply();
                 showGroupSystem();
+            }
+        });
+        l.add("⚙  فتح إعدادات الجهاز (أندرويد / Fire TV)");
+        a.add(() -> {
+            HomeWatch.suspend(this, 5 * 60_000L);
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e) {
+                toast("تعذّر فتح الإعدادات");
             }
         });
         l.add("🏠  فتح واجهة الجهاز الأصلية (3 دقائق)");
@@ -5220,7 +5237,7 @@ public class MainActivity extends Activity {
     private void applyCdVis(boolean animate) {
         applyMoonVis(animate);
         if (cdCard == null) return;
-        boolean visible = pageMain || !prefs.getBoolean("w_hide_adhan", true);
+        boolean visible = cardsVisible();
         int pcl = prefs.getInt("sv_clear", 0);
         float full = (stage >= 1 && stage <= 2 && pcl > 0) ? 1f - pcl / 100f : 1f;
         cdCard.animate().alpha(visible ? full : 0f).setDuration(animate ? ms(600L) : 0L).start();
@@ -5676,7 +5693,7 @@ public class MainActivity extends Activity {
 
     private void applyMoonVis(boolean animate) {
         if (moonCard == null) return;
-        boolean visible = pageMain || !prefs.getBoolean("w_hide_adhan", true);
+        boolean visible = cardsVisible();
         int pcl = prefs.getInt("sv_clear", 0);
         float full = (stage >= 1 && stage <= 2 && pcl > 0) ? 1f - pcl / 100f : 1f;
         full *= Math.max(10, Math.min(100, prefs.getInt("moon_alpha", 100))) / 100f;
@@ -6925,7 +6942,7 @@ public class MainActivity extends Activity {
     /** Thin progress bar for the surah: rounded track, gold gradient fill, soft knob. */
     private final class QBar extends View {
         float frac;
-        String lStart = "", lEnd = "";
+        String lStart = "", lEnd = "", lKnob = "";
         final android.graphics.Paint tp = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
 
         /** Draws text with every digit in a cell of equal width, so a running time never moves. */
@@ -7002,6 +7019,14 @@ public class MainActivity extends Activity {
                     pt.setColor(blend(col, Color.WHITE, 0.5f));
                     c.drawCircle(fx, y0 + th / 2f, th * 0.75f, pt);
                 }
+                if (prefs.getBoolean("q_bar_knobtime", true) && !lKnob.isEmpty()) {   // the reading time moves with the dot
+                    tp.setTypeface(tf(true));
+                    tp.setTextSize(fs(13) * Math.max(50, Math.min(250, prefs.getInt("q_bar_lsz", 100))) / 100f);
+                    tp.setColor(blend(col, Color.WHITE, 0.45f));
+                    float half = fixedWidth(lKnob) / 2f;
+                    float kx = Math.max(x0 + half, Math.min(x0 + w - half, fx));
+                    drawFixed(c, lKnob, kx, y0 - th * 1.6f - tp.descent());
+                }
             }
         }
     }
@@ -7056,6 +7081,7 @@ public class MainActivity extends Activity {
             qBar.frac = total > 0 ? (float) elapsed / total : 0f;
             qBar.lStart = "-" + hms(total - elapsed);
             qBar.lEnd = hms(elapsed);
+            qBar.lKnob = hms(elapsed);
             qBar.invalidate();
         }
         if (qInfo != null && prefs.getBoolean("q_times", true)) {
@@ -7381,7 +7407,8 @@ public class MainActivity extends Activity {
         qBar = new QBar();
         qBar.setVisibility(prefs.getBoolean("q_bar", true) ? View.VISIBLE : View.GONE);
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                Math.max(qBar.thick() * 3 + dp(4), Math.round(fs(14) * prefs.getInt("q_bar_lsz", 100) / 100f * 1.6f)));
+                Math.max(qBar.thick() * 3 + dp(4), Math.round(fs(14) * prefs.getInt("q_bar_lsz", 100) / 100f * 1.6f))
+                        + (prefs.getBoolean("q_bar_knobtime", true) ? Math.round(fs(13) * prefs.getInt("q_bar_lsz", 100) / 100f * 2.4f) : 0));
         bp.topMargin = dp(4);
         bp.bottomMargin = fine("q_bar_mb", dp(10));
         col.addView(qBar, bp);
@@ -7415,6 +7442,7 @@ public class MainActivity extends Activity {
         cdNum(l, a, "وضوح المسار الفارغ", "q_bar_track", 18, 0, 100, "%", back, false);
         cdToggle(l, a, "نقطة مضيئة في رأس الشريط (موضع القراءة)", "q_bar_knob", true, back);
         cdToggle(l, a, "اتجاه الشريط من اليمين لليسار", "q_bar_rtl", true, back);
+        cdToggle(l, a, "الوقت يمشي فوق النقطة اللامعة", "q_bar_knobtime", true, back);
         cdToggle(l, a, "الوقت على طرفي الشريط (بداية: الباقي، نهاية: المنقضي)", "q_bar_labels", true, back);
         cdNum(l, a, "حجم خط وقت الشريط", "q_bar_lsz", 100, 50, 250, "%", back, false);
         cdNum(l, a, "البعد عن أسفل الشاشة", "q_bar_mb", fineSteps(dp(10)), 0, 200, "", back, true);
@@ -7566,10 +7594,35 @@ public class MainActivity extends Activity {
         return o;
     }
 
+    /** Pick a surah and a reciter, and the reading starts right away. */
+    private void quranNow() {
+        final String[] names = new String[114];
+        for (int i = 0; i < 114; i++) names[i] = (i + 1) + ".  " + SURAHS[i];
+        choice("استمع الآن — اختر السورة", names, Math.max(0, prefs.getInt("q_now_s", 18) - 1), si -> {
+            final int surah = si + 1;
+            prefs.edit().putInt("q_now_s", surah).apply();
+            final String[] rn = new String[QuranPlayer.RECITERS.length + 1];
+            rn[0] = "القارئ الافتراضي";
+            for (int i = 0; i < QuranPlayer.RECITERS.length; i++) rn[i + 1] = QuranPlayer.RECITERS[i][1];
+            choice("القارئ — سورة " + SURAHS[si], rn, prefs.getInt("q_now_r", 0), ri -> {
+                prefs.edit().putInt("q_now_r", ri).apply();
+                JSONObject o = newQuranItem(surah, 0, 0, "fix", 0, 0, 127);
+                try {
+                    if (ri > 0) o.put("r", QuranPlayer.RECITERS[ri - 1][0]);
+                } catch (Exception ignored) {
+                }
+                pendingReturn = null;
+                startQuran(o, true);
+            }, this::quranNow);
+        }, this::showQuranSettings);
+    }
+
     private void showQuranSettings() {
         final List<String> l = new ArrayList<>();
         final List<Runnable> a = new ArrayList<>();
         final Runnable back = this::showQuranSettings;
+        l.add("▶  استمع الآن (بدون جدولة)");
+        a.add(this::quranNow);
         l.add("📖  جدولة القرآن:  " + onOff(prefs.getBoolean("quran_on", true)));
         a.add(() -> {
             prefs.edit().putBoolean("quran_on", !prefs.getBoolean("quran_on", true)).apply();
@@ -7952,6 +8005,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
         t.animate().alpha(1f).setDuration(350L).start();
         annView = t;
+        applyWeatherVis(true);
         speak("سيُرفع الآن أذان " + nm);
         AppLog.info("ADHAN", "announcing " + nm + ", adhan in " + wait + " ms");
         annGo = () -> {
@@ -7986,6 +8040,7 @@ public class MainActivity extends Activity {
         adhanTestCur = test;
         adhanAtCur = System.currentTimeMillis();
         if (!test) HaHook.send(this, "adhan_start", idx, null);
+        applyWeatherVis(true);
         adhanEndScheduled = false;
         duaTimeUp = false;
         duaAudioDone = false;
@@ -8227,6 +8282,7 @@ public class MainActivity extends Activity {
         }
         adhanRunning = false;
         if (!adhanTestCur) HaHook.send(this, "adhan_end", adhanIdxCur, null);
+        handler.postDelayed(() -> applyWeatherVis(true), 300L);
         if (startIqama()) return;                                        // iqama countdown, then the prayer, then back
         AppLog.info("ADHAN", "finished; returning to previous app: " + adhanReturn);
         finishReturn(adhanReturn);
@@ -8282,6 +8338,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
         }
         AppLog.info("IQAMA", "countdown " + min + " min for " + PRAYER_NAMES[iqIdx]);
+        applyWeatherVis(true);
         handler.post(iqTick);
         return true;
     }
@@ -8323,6 +8380,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(iqTick);
         root.removeView(iqView);
         iqView = null;
+        applyWeatherVis(true);
         if (natural) HaHook.send(this, "prayer_end", iqIdx, null);
         AppLog.info("IQAMA", natural ? "finished" : "cancelled");
         if (natural && prefs.getBoolean("iq_azk", false)) {

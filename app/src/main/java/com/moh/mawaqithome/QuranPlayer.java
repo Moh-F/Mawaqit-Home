@@ -89,6 +89,18 @@ final class QuranPlayer {
     private final Handler h = new Handler(Looper.getMainLooper());
     private final List<Item> items = new ArrayList<>();
     private MediaPlayer cur, nxt;
+    private boolean chained;        // nxt is linked to cur with setNextMediaPlayer: it starts with no gap
+
+    /** Links the prepared next ayah to the playing one, so the switch happens inside the media framework. */
+    private void tryChain() {
+        if (chained || stopped || cur == null || !curPlaying || nxt == null || !nxtReady) return;
+        try {
+            cur.setNextMediaPlayer(nxt);
+            chained = true;
+        } catch (Exception e) {
+            AppLog.error("QURAN", "gapless link failed", e);
+        }
+    }
     private int curIdx = -1;
     private boolean curReady, nxtReady, stopped, paused, started, curPlaying;
     private int retries;
@@ -263,6 +275,7 @@ final class QuranPlayer {
                     startCur();
                 } else if (mp == nxt) {
                     nxtReady = true;
+                    tryChain();
                 }
             });
             m.setOnCompletionListener(mp -> {
@@ -328,7 +341,7 @@ final class QuranPlayer {
             if (nxt == null && curIdx + 1 < items.size()) {
                 nxtReady = false;
                 nxt = create(curIdx + 1);
-            }
+            } else tryChain();
         } catch (Exception e) {
             AppLog.error("QURAN", "start failed", e);
             cb.onError("تعذّر التشغيل");
@@ -347,12 +360,27 @@ final class QuranPlayer {
             cb.onDone();
             return;
         }
+        boolean wasChained = chained && nxt != null && nxtReady;
+        chained = false;
         cur = nxt;
         curReady = nxtReady;
         nxt = null;
         nxtReady = false;
         if (cur == null) cur = create(curIdx);
-        else if (curReady) startCur();
+        else if (wasChained) {                                        // already playing, seamlessly
+            curPlaying = true;
+            retries = 0;
+            Item it = items.get(curIdx);
+            cb.onAyah(it.ayah, it.text, it.bism, curIdx, items.size());
+            try {
+                if (paused) cur.pause();
+            } catch (Exception ignored) {
+            }
+            if (curIdx + 1 < items.size()) {
+                nxtReady = false;
+                nxt = create(curIdx + 1);
+            }
+        } else if (curReady) startCur();
     }
 
     void pause() {
